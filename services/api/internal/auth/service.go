@@ -171,7 +171,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput, meta RequestMe
 	if err != nil {
 		return NewSession{}, err
 	}
-	u := User{ID: ids.New(), Email: email, DisplayName: name, Status: "ACTIVE", CreatedAt: s.now()}
+	u := User{ID: ids.New(), Email: email, DisplayName: name, Status: "ACTIVE", Role: "user", CreatedAt: s.now()}
 	u.PasswordHash = hash
 
 	var sess NewSession
@@ -285,7 +285,7 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Principal, er
 			s.log.Warn("touch session failed", "err", err)
 		}
 	}
-	return Principal{UserID: row.UserID, SessionID: row.ID, Email: row.Email, DisplayName: row.DisplayName}, nil
+	return Principal{UserID: row.UserID, SessionID: row.ID, Email: row.Email, DisplayName: row.DisplayName, Role: row.Role}, nil
 }
 
 func (s *Service) Logout(ctx context.Context, p Principal, meta RequestMeta) error {

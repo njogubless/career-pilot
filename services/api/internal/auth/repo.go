@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,17 +17,18 @@ type User struct {
 	Email        string    `json:"email"`
 	DisplayName  string    `json:"display_name"`
 	Status       string    `json:"-"`
+	Role         string    `json:"role"`
 	PasswordHash string    `json:"-"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
 var errNotFound = errors.New("not found")
 
-const userCols = `id, email::text, display_name, status, password_hash, created_at`
+const userCols = `id, email::text, display_name, status, role, password_hash, created_at`
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Status, &u.PasswordHash, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Status, &u.Role, &u.PasswordHash, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, errNotFound
 	}
@@ -56,6 +58,7 @@ type sessionRow struct {
 	Email         string
 	DisplayName   string
 	UserStatus    string
+	Role          string
 }
 
 func insertSession(ctx context.Context, q db.Querier, id, userID uuid.UUID, tokenHash []byte, expires, idle time.Time, ip, ua string) error {
@@ -70,10 +73,10 @@ func insertSession(ctx context.Context, q db.Querier, id, userID uuid.UUID, toke
 func activeSession(ctx context.Context, q db.Querier, tokenHash []byte, now time.Time) (sessionRow, error) {
 	var s sessionRow
 	err := q.QueryRow(ctx, `
-		SELECT s.id, s.user_id, s.expires_at, s.idle_expires_at, s.last_seen_at, u.email::text, u.display_name, u.status
+		SELECT s.id, s.user_id, s.expires_at, s.idle_expires_at, s.last_seen_at, u.email::text, u.display_name, u.status, u.role
 		FROM user_sessions s JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > $2 AND s.idle_expires_at > $2`,
-		tokenHash, now).Scan(&s.ID, &s.UserID, &s.ExpiresAt, &s.IdleExpiresAt, &s.LastSeenAt, &s.Email, &s.DisplayName, &s.UserStatus)
+		tokenHash, now).Scan(&s.ID, &s.UserID, &s.ExpiresAt, &s.IdleExpiresAt, &s.LastSeenAt, &s.Email, &s.DisplayName, &s.UserStatus, &s.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return sessionRow{}, errNotFound
 	}
@@ -131,4 +134,16 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// SetRole changes a user's role (operator CLI only; never exposed over HTTP).
+func SetRole(ctx context.Context, q db.Querier, email, role string) error {
+	tag, err := q.Exec(ctx, `UPDATE users SET role = $2, updated_at = now() WHERE email = $1`, strings.ToLower(strings.TrimSpace(email)), role)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errNotFound
+	}
+	return nil
 }

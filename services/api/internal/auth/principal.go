@@ -13,7 +13,10 @@ type Principal struct {
 	SessionID   uuid.UUID
 	Email       string
 	DisplayName string
+	Role        string // "user" | "admin"
 }
+
+func (p Principal) IsAdmin() bool { return p.Role == "admin" }
 
 type principalKey struct{}
 

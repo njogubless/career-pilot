@@ -50,6 +50,18 @@ func (h *HTTP) meta(r *http.Request) RequestMeta {
 // Meta is exported for other modules that audit requests.
 func (h *HTTP) Meta(r *http.Request) RequestMeta { return h.meta(r) }
 
+// RequireAdmin must be mounted after RequireAuth. Non-admins get 404 so the
+// admin surface is not discoverable.
+func (h *HTTP) RequireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p, ok := PrincipalFrom(r.Context()); !ok || !p.IsAdmin() {
+			httpx.WriteError(w, r, httpx.NewError(httpx.CodeNotFound, "Resource not found."))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // LoadSession attaches the principal when a valid session cookie is present.
 func (h *HTTP) LoadSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

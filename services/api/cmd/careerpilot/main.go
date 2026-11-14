@@ -26,9 +26,11 @@ import (
 
 	"github.com/careerpilot/careerpilot/services/api/internal/aiclient"
 	"github.com/careerpilot/careerpilot/services/api/internal/auth"
+	"github.com/careerpilot/careerpilot/services/api/internal/discovery"
 	"github.com/careerpilot/careerpilot/services/api/internal/documents"
 	"github.com/careerpilot/careerpilot/services/api/internal/health"
 	"github.com/careerpilot/careerpilot/services/api/internal/jobs"
+	"github.com/careerpilot/careerpilot/services/api/internal/listings"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/crypto"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/db"
@@ -37,6 +39,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/ratelimit"
 	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
 	"github.com/careerpilot/careerpilot/services/api/internal/server"
+	"github.com/careerpilot/careerpilot/services/api/internal/sources"
 )
 
 func main() {
@@ -48,7 +51,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: careerpilot <serve|worker|migrate up|migrate status|healthcheck>")
+		return errors.New("usage: careerpilot <serve|worker|migrate up|migrate status|sources seed|users promote <email>|healthcheck>")
 	}
 	if args[0] == "healthcheck" {
 		// Container probe for distroless images (no shell/curl). Needs no config.
@@ -71,6 +74,10 @@ func run(args []string) error {
 		return worker(ctx, cfg, log)
 	case "migrate":
 		return migrate(ctx, cfg, log, args[1:])
+	case "sources":
+		return sourcesCmd(ctx, cfg, args[1:])
+	case "users":
+		return usersCmd(ctx, cfg, args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -186,6 +193,14 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		return err
 	}
 
+	if cfg.SeedJobSources {
+		if n, err := discovery.SeedSources(ctx, in.pool); err != nil {
+			return fmt.Errorf("seed job sources: %w", err)
+		} else if n > 0 {
+			log.Info("seeded job sources", "added", n)
+		}
+	}
+
 	jobClient, err := jobs.NewInsertClient(in.pool, log)
 	if err != nil {
 		return err
@@ -222,12 +237,16 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	profilesH := profiles.NewHTTP(profiles.NewService(in.pool))
 	docSvc := documents.NewService(in.pool, in.store, jobClient, in.ai, cfg.MaxUploadBytes, log)
 	docH := documents.NewHTTP(docSvc, authH, cfg.MaxUploadBytes)
+	discSvc := discovery.NewService(in.pool, sources.NewRegistry(newFetcher(cfg)), log)
+	discH := discovery.NewHTTP(discSvc, jobClient, limiter)
+	listH := listings.NewHTTP(in.pool)
 
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: server.NewRouter(server.Deps{
 			Config: cfg, Logger: log, Checkers: in.checkers, AI: in.ai,
 			Auth: authH, Profiles: profilesH, Documents: docH, StorageReady: in.store != nil,
+			Discovery: discH, Listings: listH,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       cfg.HTTPReadTimeout,
@@ -280,8 +299,14 @@ func worker(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		extract.Store = in.store
 	}
 	river.AddWorker(workers, extract)
+	discSvc := discovery.NewService(in.pool, sources.NewRegistry(newFetcher(cfg)), log)
+	river.AddWorker(workers, &discovery.DiscoverAllWorker{Pool: in.pool})
+	river.AddWorker(workers, &discovery.DiscoverSourceWorker{Service: discSvc, Log: log})
+	if cfg.DiscoveryInterval == 0 {
+		log.Warn("scheduled discovery disabled (DISCOVERY_INTERVAL=0); manual runs still work")
+	}
 
-	client, err := jobs.NewWorkerClient(in.pool, workers, log, 4)
+	client, err := jobs.NewWorkerClient(in.pool, workers, log, 4, discovery.PeriodicJobs(cfg.DiscoveryInterval)...)
 	if err != nil {
 		return err
 	}
@@ -297,6 +322,45 @@ func worker(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 }
 
 func notConfigured(context.Context) error { return health.ErrNotConfigured }
+
+func newFetcher(cfg config.Config) *sources.Fetcher {
+	return sources.NewFetcher(sources.FetcherOptions{UserAgent: cfg.DiscoveryUserAgent})
+}
+
+func sourcesCmd(ctx context.Context, cfg config.Config, args []string) error {
+	if len(args) == 0 || args[0] != "seed" {
+		return errors.New("usage: careerpilot sources seed")
+	}
+	pool, err := db.Connect(ctx, cfg.DatabaseURL, 2)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	n, err := discovery.SeedSources(ctx, pool)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("seeded %d new job source(s)\n", n)
+	return nil
+}
+
+// usersCmd grants or revokes the operator role. Deliberately CLI-only.
+func usersCmd(ctx context.Context, cfg config.Config, args []string) error {
+	if len(args) != 2 || (args[0] != "promote" && args[0] != "demote") {
+		return errors.New("usage: careerpilot users <promote|demote> <email>")
+	}
+	pool, err := db.Connect(ctx, cfg.DatabaseURL, 2)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	role := map[string]string{"promote": "admin", "demote": "user"}[args[0]]
+	if err := auth.SetRole(ctx, pool, args[1], role); err != nil {
+		return fmt.Errorf("set role for %s: %w", args[1], err)
+	}
+	fmt.Printf("%s is now %s\n", args[1], role)
+	return nil
+}
 
 func healthcheck() error {
 	addr := os.Getenv("API_HTTP_ADDR")

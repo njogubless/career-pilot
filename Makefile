@@ -53,6 +53,8 @@ dev-web: ## Run the Vite dev server (proxies /api to :8080)
 	cd $(WEB_DIR) && pnpm dev
 dev-worker: ## Run the background job worker on the host
 	set -a; source .env; set +a; cd $(API_DIR) && go run ./cmd/careerpilot worker
+seed-sources: ## Insert the curated default job boards (idempotent)
+	set -a; source .env; set +a; cd $(API_DIR) && go run ./cmd/careerpilot sources seed
 migrate: ## Apply database migrations
 	set -a; source .env; set +a; cd $(API_DIR) && go run ./cmd/careerpilot migrate up
 

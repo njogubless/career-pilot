@@ -11,8 +11,10 @@ import (
 
 	"github.com/careerpilot/careerpilot/services/api/internal/aiclient"
 	"github.com/careerpilot/careerpilot/services/api/internal/auth"
+	"github.com/careerpilot/careerpilot/services/api/internal/discovery"
 	"github.com/careerpilot/careerpilot/services/api/internal/documents"
 	"github.com/careerpilot/careerpilot/services/api/internal/health"
+	"github.com/careerpilot/careerpilot/services/api/internal/listings"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/httpx"
 	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
@@ -28,6 +30,8 @@ type Deps struct {
 	Auth      *auth.HTTP
 	Profiles  *profiles.HTTP
 	Documents *documents.HTTP
+	Discovery *discovery.HTTP
+	Listings  *listings.HTTP
 	// StorageReady reports whether document storage is configured.
 	StorageReady bool
 }
@@ -64,6 +68,18 @@ func NewRouter(d Deps) http.Handler {
 				}
 				if d.Documents != nil {
 					d.Documents.Routes(r)
+				}
+				if d.Discovery != nil {
+					d.Discovery.Routes(r)
+				}
+				if d.Listings != nil {
+					d.Listings.Routes(r)
+				}
+				if d.Discovery != nil {
+					r.Group(func(r chi.Router) {
+						r.Use(d.Auth.RequireAdmin)
+						d.Discovery.AdminRoutes(r)
+					})
 				}
 			})
 		})
@@ -120,7 +136,7 @@ func metaHandler(d Deps) http.HandlerFunc {
 				"ai_service":       aiStatus(r.Context(), d.AI, "service"),
 				"llm":              aiStatus(r.Context(), d.AI, "llm"),
 				"document_storage": storage,
-				"job_sources":      {Status: StatusNotImplemented, Detail: "Planned for Phase 3."},
+				"job_sources":      jobSourcesStatus(d),
 				"gmail":            {Status: StatusNotImplemented, Detail: "Planned for Phase 7."},
 			},
 		}
@@ -145,4 +161,11 @@ func aiStatus(ctx context.Context, c *aiclient.Client, which string) integration
 		return integration{Status: StatusNotConfigured, Detail: "No LLM provider credentials configured."}
 	}
 	return integration{Status: StatusAvailable, Detail: info.LLMProvider}
+}
+
+func jobSourcesStatus(d Deps) integration {
+	if d.Discovery == nil {
+		return integration{Status: StatusNotConfigured, Detail: "Job discovery is not enabled on this server."}
+	}
+	return integration{Status: StatusAvailable, Detail: "Greenhouse, Lever, Ashby and Remote OK public boards."}
 }

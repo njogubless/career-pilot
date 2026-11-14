@@ -20,8 +20,10 @@ import (
 
 	"github.com/careerpilot/careerpilot/services/api/internal/aiclient"
 	"github.com/careerpilot/careerpilot/services/api/internal/auth"
+	"github.com/careerpilot/careerpilot/services/api/internal/discovery"
 	"github.com/careerpilot/careerpilot/services/api/internal/documents"
 	"github.com/careerpilot/careerpilot/services/api/internal/jobs"
+	"github.com/careerpilot/careerpilot/services/api/internal/listings"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/crypto"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/db"
@@ -30,6 +32,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/ratelimit"
 	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
 	"github.com/careerpilot/careerpilot/services/api/internal/server"
+	"github.com/careerpilot/careerpilot/services/api/internal/sources"
 )
 
 // NewDB creates an isolated, migrated database and drops it after the test.
@@ -98,19 +101,21 @@ func (m *CaptureMailer) Last() (mailer.Message, bool) {
 }
 
 type App struct {
-	Handler http.Handler
-	Pool    *pgxpool.Pool
-	Store   *documents.Memory
-	Mail    *CaptureMailer
-	Jobs    *jobs.Client
-	AI      *aiclient.Client
-	Log     *slog.Logger
+	Handler   http.Handler
+	Pool      *pgxpool.Pool
+	Store     *documents.Memory
+	Mail      *CaptureMailer
+	Jobs      *jobs.Client
+	AI        *aiclient.Client
+	Log       *slog.Logger
+	Discovery *discovery.Service
 }
 
 // Options customise the app under test.
 type Options struct {
 	AIURL     string // empty: AI service not configured
 	NoStorage bool
+	Adapters  sources.Registry // job-source adapters (fakes in tests)
 }
 
 func New(t *testing.T, opts Options) *App {
@@ -142,9 +147,14 @@ func New(t *testing.T, opts Options) *App {
 	}
 	docH := documents.NewHTTP(documents.NewService(pool, st, jobClient, ai, cfg.MaxUploadBytes, log), authH, cfg.MaxUploadBytes)
 
+	if opts.Adapters == nil {
+		opts.Adapters = sources.Registry{}
+	}
+	disc := discovery.NewService(pool, opts.Adapters, log)
 	h := server.NewRouter(server.Deps{Config: cfg, Logger: log, AI: ai, Auth: authH,
-		Profiles: profiles.NewHTTP(profiles.NewService(pool)), Documents: docH, StorageReady: !opts.NoStorage})
-	return &App{Handler: h, Pool: pool, Store: store, Mail: mail, Jobs: jobClient, AI: ai, Log: log}
+		Profiles: profiles.NewHTTP(profiles.NewService(pool)), Documents: docH, StorageReady: !opts.NoStorage,
+		Discovery: discovery.NewHTTP(disc, jobClient, ratelimit.NewMemory()), Listings: listings.NewHTTP(pool)})
+	return &App{Handler: h, Pool: pool, Store: store, Mail: mail, Jobs: jobClient, AI: ai, Log: log, Discovery: disc}
 }
 
 // Exec runs SQL directly (assertions on persisted state).

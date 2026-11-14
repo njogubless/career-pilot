@@ -63,6 +63,11 @@ type Config struct {
 	SessionAbsTTL     time.Duration
 	MaxUploadBytes    int64
 
+	// DiscoveryInterval schedules full discovery cycles (0 disables scheduling).
+	DiscoveryInterval  time.Duration
+	DiscoveryUserAgent string
+	SeedJobSources     bool
+
 	SMTPAddr     string
 	SMTPUsername string
 	SMTPPassword string
@@ -113,6 +118,10 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		SessionIdleTTL:    r.duration("SESSION_IDLE_TTL", 7*24*time.Hour),
 		SessionAbsTTL:     r.duration("SESSION_ABSOLUTE_TTL", 30*24*time.Hour),
 		MaxUploadBytes:    r.int64("MAX_UPLOAD_BYTES", 10<<20),
+
+		DiscoveryInterval:  r.duration("DISCOVERY_INTERVAL", 6*time.Hour),
+		DiscoveryUserAgent: r.str("DISCOVERY_USER_AGENT", "CareerPilotBot/0.1 (+job discovery; respects source terms)"),
+		SeedJobSources:     r.bool("SEED_JOB_SOURCES", false),
 
 		SMTPAddr:     r.str("SMTP_ADDR", ""),
 		SMTPUsername: r.str("SMTP_USERNAME", ""),
@@ -172,6 +181,9 @@ func (c Config) validate() []error {
 	}
 	if c.MaxUploadBytes < 1024 || c.MaxUploadBytes > 50<<20 {
 		errs = append(errs, errors.New("MAX_UPLOAD_BYTES: must be between 1 KiB and 50 MiB"))
+	}
+	if c.DiscoveryInterval != 0 && c.DiscoveryInterval < 15*time.Minute {
+		errs = append(errs, errors.New("DISCOVERY_INTERVAL: must be 0 (disabled) or at least 15m"))
 	}
 	if (c.SMTPAddr == "") != (c.SMTPFrom == "") {
 		errs = append(errs, errors.New("SMTP_ADDR and SMTP_FROM: set both or neither"))

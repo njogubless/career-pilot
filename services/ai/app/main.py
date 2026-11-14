@@ -8,9 +8,15 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.api import cv
 from app.api.routes import internal, public
-from app.core.config import AppEnv, Settings, get_settings
+from app.core.config import AppEnv, ProviderName, Settings, get_settings
+from app.core.errors import ServiceError
 from app.core.logging import configure_logging
+from app.providers.factory import build_provider
+
+# Largest accepted request body (base64 CV + JSON overhead).
+MAX_BODY_BYTES = 15 * 1024 * 1024
 
 log = logging.getLogger("careerpilot.ai")
 
@@ -35,8 +41,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url=None if settings.app_env is AppEnv.PRODUCTION else "/openapi.json",
     )
     app.dependency_overrides[get_settings] = lambda: settings
+    # Built once; None means no provider is configured (endpoints answer 503).
+    app.state.provider = None if settings.resolved_provider is ProviderName.NONE else build_provider(settings)
     app.include_router(public)
     app.include_router(internal)
+    app.include_router(cv.router)
+
+    @app.middleware("http")
+    async def _limit_body(request: Request, call_next):  # type: ignore[no-untyped-def]
+        length = request.headers.get("content-length")
+        if length is not None and (not length.isdigit() or int(length) > MAX_BODY_BYTES):
+            return _envelope("PAYLOAD_TOO_LARGE", "The request body is too large.", 413)
+        return await call_next(request)
+
+    @app.exception_handler(ServiceError)
+    async def _service_exc(_: Request, exc: ServiceError) -> JSONResponse:
+        if exc.status >= 500:
+            log.warning("service error", extra={"fields": {"code": exc.code, "status": exc.status}})
+        return _envelope(exc.code, exc.message, exc.status)
 
     @app.exception_handler(HTTPException)
     async def _http_exc(_: Request, exc: HTTPException) -> JSONResponse:

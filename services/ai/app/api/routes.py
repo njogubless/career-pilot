@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app import prompts
 from app.core.config import Settings, get_settings
 from app.core.security import require_service_token
 
@@ -42,6 +43,6 @@ def info(settings: Annotated[Settings, Depends(get_settings)]) -> Info:
         version=settings.app_version,
         llm_provider=settings.resolved_provider.value,
         llm_configured=settings.llm_configured,
-        prompt_versions=[],
-        capabilities=["info"],
+        prompt_versions=prompts.all_ids(),
+        capabilities=["info", "cv.extract"] if settings.llm_configured else ["info"],
     )

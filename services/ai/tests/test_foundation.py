@@ -38,7 +38,10 @@ def test_info_reports_no_provider_honestly():
 def test_auto_provider_prefers_anthropic():
     s = Settings(app_env=AppEnv.TEST, anthropic_api_key="k1", openai_api_key="k2")
     assert s.resolved_provider is ProviderName.ANTHROPIC
-    assert Settings(app_env=AppEnv.TEST, openai_api_key="k2").resolved_provider is ProviderName.OPENAI
+    # OpenAI is not implemented yet: its key alone does not enable AI features.
+    assert Settings(app_env=AppEnv.TEST, openai_api_key="k2").resolved_provider is ProviderName.NONE
+    with pytest.raises(ValidationError):
+        Settings(app_env=AppEnv.TEST, ai_provider=ProviderName.OPENAI, openai_api_key="k2")
 
 
 def test_explicit_provider_requires_key():

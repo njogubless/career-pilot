@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -40,6 +41,12 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr = Field(default=SecretStr(""))
     openai_api_key: SecretStr = Field(default=SecretStr(""))
 
+    # Default model per project guidance; override with AI_MODEL.
+    ai_model: str = "claude-opus-5-5"
+    # Claude Opus 5.5 defaults to "medium"; set explicitly so behaviour is pinned.
+    ai_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    ai_timeout_s: float = Field(default=180.0, gt=0, le=600)
+
     @model_validator(mode="after")
     def _validate(self) -> Settings:
         if self.app_env is AppEnv.PRODUCTION:
@@ -49,8 +56,9 @@ class Settings(BaseSettings):
                 raise ValueError("AI_PROVIDER=fake is not allowed in production")
         if self.ai_provider is ProviderName.ANTHROPIC and not self.anthropic_api_key.get_secret_value():
             raise ValueError("AI_PROVIDER=anthropic requires ANTHROPIC_API_KEY")
-        if self.ai_provider is ProviderName.OPENAI and not self.openai_api_key.get_secret_value():
-            raise ValueError("AI_PROVIDER=openai requires OPENAI_API_KEY")
+        if self.ai_provider is ProviderName.OPENAI:
+            # Planned (ADR-009) but not implemented; refuse rather than pretend.
+            raise ValueError("AI_PROVIDER=openai is not implemented yet; use anthropic")
         return self
 
     @property
@@ -60,8 +68,6 @@ class Settings(BaseSettings):
             return self.ai_provider
         if self.anthropic_api_key.get_secret_value():
             return ProviderName.ANTHROPIC
-        if self.openai_api_key.get_secret_value():
-            return ProviderName.OPENAI
         return ProviderName.NONE
 
     @property

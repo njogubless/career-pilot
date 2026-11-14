@@ -19,6 +19,8 @@ env: ## Create .env from .env.example with generated secrets (refuses to overwri
 	    -e "s|^SESSION_SECRET=.*|SESSION_SECRET=$$(openssl rand -hex 32)|" \
 	    -e "s|^DATA_ENCRYPTION_KEY=.*|DATA_ENCRYPTION_KEY=$$(openssl rand -base64 32)|" \
 	    -e "s|^AI_SERVICE_TOKEN=.*|AI_SERVICE_TOKEN=$$(openssl rand -hex 32)|" \
+	    -e "s|^S3_ACCESS_KEY=.*|S3_ACCESS_KEY=$$(openssl rand -hex 10)|" \
+	    -e "s|^S3_SECRET_KEY=.*|S3_SECRET_KEY=$$(openssl rand -hex 24)|" \
 	    .env.example > .env && chmod 600 .env && echo "Wrote .env"
 
 .PHONY: setup
@@ -30,8 +32,8 @@ setup: ## Install all toolchains' dependencies
 
 # ---------- Stack ----------
 .PHONY: infra up down logs ps
-infra: ## Start Postgres + Redis only
-	docker compose up -d postgres redis
+infra: ## Start Postgres, Redis and object storage only
+	docker compose up -d postgres redis storage
 up: ## Build and start the full stack (web on :8088)
 	docker compose up -d --build
 down: ## Stop the stack (data volume kept)
@@ -42,20 +44,24 @@ ps: ## Show stack status
 	docker compose ps
 
 # ---------- Run services on the host ----------
-.PHONY: dev-api dev-ai dev-web migrate
+.PHONY: dev-api dev-ai dev-web dev-worker migrate
 dev-api: ## Run the Go API on the host (needs `make infra`)
 	set -a; source .env; set +a; cd $(API_DIR) && go run ./cmd/careerpilot serve
 dev-ai: ## Run the AI service on the host
 	set -a; source .env; set +a; cd $(AI_DIR) && .venv/bin/uvicorn app.main:create_app --factory --reload --port 8090
 dev-web: ## Run the Vite dev server (proxies /api to :8080)
 	cd $(WEB_DIR) && pnpm dev
+dev-worker: ## Run the background job worker on the host
+	set -a; source .env; set +a; cd $(API_DIR) && go run ./cmd/careerpilot worker
 migrate: ## Apply database migrations
 	set -a; source .env; set +a; cd $(API_DIR) && go run ./cmd/careerpilot migrate up
 
 # ---------- Quality ----------
 .PHONY: test test-api test-ai test-web lint lint-api lint-ai lint-web build
 test: test-api test-ai test-web ## Run all unit tests
-test-api:
+test-api: ## Go tests (integration tests use the compose Postgres when reachable)
+	set -a; [ -f .env ] && source .env; set +a; \
+	export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-postgres://$${POSTGRES_USER:-careerpilot}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_HOST_PORT:-55432}/$${POSTGRES_DB:-careerpilot}?sslmode=disable}"; \
 	cd $(API_DIR) && go test -race ./...
 test-ai:
 	cd $(AI_DIR) && .venv/bin/pytest

@@ -1,0 +1,109 @@
+// Package server assembles the HTTP router from module handlers.
+package server
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/careerpilot/careerpilot/services/api/internal/aiclient"
+	"github.com/careerpilot/careerpilot/services/api/internal/health"
+	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
+	"github.com/careerpilot/careerpilot/services/api/internal/platform/httpx"
+)
+
+// Deps are the collaborators the router needs. Nil optional deps are reported
+// honestly as not configured.
+type Deps struct {
+	Config   config.Config
+	Logger   *slog.Logger
+	Checkers []health.Checker
+	AI       *aiclient.Client // nil when AI_SERVICE_URL is unset
+}
+
+func NewRouter(d Deps) http.Handler {
+	r := chi.NewRouter()
+	r.Use(
+		httpx.RequestID(d.Logger),
+		httpx.Recover,
+		httpx.AccessLog,
+		httpx.SecurityHeaders(d.Config.IsProduction()),
+		httpx.MaxBody(d.Config.MaxBodyBytes),
+	)
+
+	h := health.NewHandler(d.Config.Version, 3*time.Second, d.Checkers...)
+	r.Get("/healthz", h.Live)
+	r.Get("/readyz", h.Ready)
+
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Get("/meta", metaHandler(d))
+	})
+
+	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		httpx.WriteError(w, r, httpx.NewError(httpx.CodeNotFound, "Resource not found."))
+	})
+	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+		httpx.WriteError(w, r, httpx.NewError(httpx.CodeNotFound, "Resource not found."))
+	})
+	return r
+}
+
+// IntegrationStatus values are deliberately explicit so the UI never implies
+// an integration works when it does not (master prompt §31, §52).
+type IntegrationStatus string
+
+const (
+	StatusAvailable      IntegrationStatus = "available"
+	StatusUnavailable    IntegrationStatus = "unavailable"
+	StatusNotConfigured  IntegrationStatus = "not_configured"
+	StatusNotImplemented IntegrationStatus = "not_implemented"
+)
+
+type integration struct {
+	Status IntegrationStatus `json:"status"`
+	Detail string            `json:"detail,omitempty"`
+}
+
+type metaResponse struct {
+	Version      string                 `json:"version"`
+	Environment  string                 `json:"environment"`
+	Integrations map[string]integration `json:"integrations"`
+}
+
+func metaHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		resp := metaResponse{
+			Version:     d.Config.Version,
+			Environment: string(d.Config.Env),
+			Integrations: map[string]integration{
+				"ai_service":  aiStatus(r.Context(), d.AI, "service"),
+				"llm":         aiStatus(r.Context(), d.AI, "llm"),
+				"job_sources": {Status: StatusNotImplemented, Detail: "Planned for Phase 3."},
+				"gmail":       {Status: StatusNotImplemented, Detail: "Planned for Phase 7."},
+			},
+		}
+		httpx.WriteJSON(w, http.StatusOK, resp)
+	}
+}
+
+func aiStatus(ctx context.Context, c *aiclient.Client, which string) integration {
+	if c == nil {
+		return integration{Status: StatusNotConfigured, Detail: "AI_SERVICE_URL is not set."}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	info, err := c.Info(ctx)
+	if err != nil {
+		return integration{Status: StatusUnavailable, Detail: "AI service is unreachable."}
+	}
+	if which == "service" {
+		return integration{Status: StatusAvailable}
+	}
+	if !info.LLMConfigured {
+		return integration{Status: StatusNotConfigured, Detail: "No LLM provider credentials configured."}
+	}
+	return integration{Status: StatusAvailable, Detail: info.LLMProvider}
+}

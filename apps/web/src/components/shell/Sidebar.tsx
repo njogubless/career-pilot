@@ -3,6 +3,7 @@ import { NavLink } from "react-router";
 import { Icon } from "../ui/Icon";
 import { navGroups } from "./nav";
 import { SystemStatusCard } from "./SystemStatusCard";
+import { UserCard } from "./UserCard";
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   return (
@@ -63,6 +64,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           </div>
         ))}
       </nav>
+      <UserCard />
     </div>
   );
 }

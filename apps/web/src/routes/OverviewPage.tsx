@@ -2,7 +2,10 @@ import { Link } from "react-router";
 import { EmptyState, Panel, SectionHeader } from "../components/ui/Panel";
 import { Tag, type TagTone } from "../components/ui/Tag";
 import { Icon } from "../components/ui/Icon";
+import { Loading } from "../components/ui/Loading";
 import { useMeta, type IntegrationStatus } from "../lib/meta";
+import { useProfile } from "../lib/profile";
+import { useSession } from "../lib/session";
 
 /**
  * Overview, structured after the Stitch "Career Intelligence Terminal".
@@ -21,6 +24,7 @@ const metrics = [
 
 const integrationLabels: Record<string, string> = {
   ai_service: "AI service",
+  document_storage: "Document storage",
   llm: "LLM provider",
   job_sources: "Job sources",
   gmail: "Gmail",
@@ -40,24 +44,65 @@ const statusText: Record<IntegrationStatus, string> = {
   not_implemented: "Not built yet",
 };
 
-const setupSteps = [
-  { to: "/profile", label: "Build your professional profile", phase: 2 },
-  { to: "/documents", label: "Upload your CV for extraction", phase: 2 },
-  { to: "/profile", label: "Set career preferences and constraints", phase: 2 },
-  { to: "/discover", label: "Run your first discovery cycle", phase: 3 },
-];
+function greeting(): string {
+  const h = new Date().getHours();
+  return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+}
+
+/** Setup checklist driven by the server's profile completeness. */
+function SetupChecklist() {
+  const profile = useProfile();
+  if (profile.isPending) return <Loading label="Checking your profile" />;
+  if (profile.isError) return <p className="p-space-md text-body-sm text-terracotta">{profile.error.message}</p>;
+  const c = profile.data.completeness;
+  const hasCV = profile.data.experiences.length > 0 || profile.data.skills.length > 0;
+  return (
+    <>
+      <div className="flex items-baseline justify-between px-space-md pb-space-sm">
+        <span className="label-caps text-outline">Profile completeness</span>
+        <span className="font-mono text-data-metric text-on-surface">{c.score}%</span>
+      </div>
+      <ol className="divide-y divide-stone border-t border-stone">
+        {!hasCV && (
+          <li className="flex items-center justify-between gap-space-md px-space-md py-space-sm">
+            <Link to="/documents" className="text-title-md text-on-surface underline-offset-4 hover:underline">
+              Upload your CV and review the extracted profile
+            </Link>
+            <Tag tone="citron">Start here</Tag>
+          </li>
+        )}
+        {c.missing.map((m) => (
+          <li key={m.key} className="flex items-center justify-between gap-space-md px-space-md py-space-sm">
+            <Link to="/profile" className="min-w-0 text-title-md text-on-surface underline-offset-4 hover:underline">
+              {m.label}
+            </Link>
+            <span className="font-mono text-label-sm text-muted">+{m.weight}%</span>
+          </li>
+        ))}
+        <li className="flex items-center justify-between gap-space-md px-space-md py-space-sm">
+          <span className="text-title-md text-on-surface-variant">Run your first discovery cycle</span>
+          <Tag tone="outline">Phase 3</Tag>
+        </li>
+      </ol>
+    </>
+  );
+}
 
 export function OverviewPage() {
   const meta = useMeta();
+  const session = useSession();
+  const firstName = session.data?.display_name.split(/\s+/)[0];
 
   return (
     <div className="flex flex-col gap-space-lg">
       <Panel className="flex flex-col gap-space-xs p-space-lg">
         <div className="flex flex-wrap items-center gap-space-xs">
           <Tag tone="graphite">Portfolio overview</Tag>
-          <span className="label-caps text-outline">Foundation release</span>
+          <span className="label-caps text-outline">Human-approved mode</span>
         </div>
-        <h1 className="mt-1 font-serif text-headline-lg-mobile tracking-tight text-on-surface md:text-headline-lg">Career execution, under your control.</h1>
+        <h1 className="mt-1 font-serif text-headline-lg-mobile tracking-tight text-on-surface md:text-headline-lg">
+          {firstName ? `${greeting()}, ${firstName}.` : "Career execution, under your control."}
+        </h1>
         <p className="max-w-2xl text-body-lg text-on-surface-variant">
           CareerPilot discovers relevant roles, explains how well they fit, prepares truthful applications and asks for your
           approval before anything leaves the platform. Your workspace fills in as you complete each step below.
@@ -97,19 +142,7 @@ export function OverviewPage() {
             <div className="p-space-md">
               <SectionHeader eyebrow="Getting started" title="Set up your workspace" />
             </div>
-            <ol className="divide-y divide-stone border-t border-stone">
-              {setupSteps.map((s, i) => (
-                <li key={s.label} className="flex items-center justify-between gap-space-md px-space-md py-space-sm">
-                  <span className="flex items-center gap-space-sm">
-                    <span className="font-mono text-label-md text-outline">{String(i + 1).padStart(2, "0")}</span>
-                    <Link to={s.to} className="text-title-md text-on-surface underline-offset-4 hover:underline">
-                      {s.label}
-                    </Link>
-                  </span>
-                  <Tag tone="outline">Phase {s.phase}</Tag>
-                </li>
-              ))}
-            </ol>
+            <SetupChecklist />
           </Panel>
         </div>
 

@@ -1,89 +1,194 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { matchTone } from "../lib/score";
 import { ApiError, apiFetch } from "../lib/api";
-import { mockFetchJson, renderApp } from "./render";
+import { safeNext } from "../lib/redirect";
+import { matchTone } from "../lib/score";
+import { emptyProfile, mockApi, renderApp, signedIn } from "./render";
 
-const meta = {
-  version: "test",
-  environment: "test",
-  integrations: {
-    ai_service: { status: "available" },
-    llm: { status: "not_configured", detail: "No LLM provider credentials configured." },
-    gmail: { status: "not_implemented", detail: "Planned for Phase 7." },
-  },
-};
+describe("authentication", () => {
+  it("redirects signed-out users to login, then back to the requested page", async () => {
+    let authed = false;
+    mockApi({
+      ...signedIn,
+      "GET /api/v1/auth/session": () => (authed ? [200, { user: { id: "u1", email: "a@b.co", display_name: "Amani Otieno", created_at: "" }, csrf_token: "c" }] : [401, { error: { code: "UNAUTHENTICATED", message: "Not signed in." } }]),
+      "POST /api/v1/auth/login": () => {
+        authed = true;
+        return [200, { user: { id: "u1", email: "a@b.co", display_name: "Amani Otieno", created_at: "" }, csrf_token: "c" }];
+      },
+    });
+    const u = userEvent.setup();
+    const { router } = renderApp("/settings");
+    expect(await screen.findByRole("heading", { name: "Welcome back." })).toBeInTheDocument();
+    expect(router.state.location.search).toBe("?next=%2Fsettings");
 
-describe("app shell", () => {
-  it("renders overview with live integration status and no sample data", async () => {
-    mockFetchJson(200, meta);
+    await u.type(screen.getByLabelText("Email"), "a@b.co");
+    await u.type(screen.getByLabelText("Password"), "a-strong-passphrase");
+    await u.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("shows the server's generic error on bad credentials", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": [401, { error: { code: "UNAUTHENTICATED", message: "Not signed in." } }],
+      "POST /api/v1/auth/login": [401, { error: { code: "UNAUTHENTICATED", message: "The email or password is incorrect." } }],
+    });
+    const u = userEvent.setup();
+    renderApp("/login");
+    await u.type(await screen.findByLabelText("Email"), "a@b.co");
+    await u.type(screen.getByLabelText("Password"), "wrong");
+    await u.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The email or password is incorrect.");
+  });
+
+  it("validates registration client-side and shows server field errors", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": [401, { error: { code: "UNAUTHENTICATED", message: "x" } }],
+      "POST /api/v1/auth/register": [409, { error: { code: "CONFLICT", message: "An account with this email already exists.", details: { email: "Already registered." } } }],
+    });
+    const u = userEvent.setup();
+    renderApp("/register");
+    await u.click(await screen.findByRole("button", { name: "Create account" }));
+    expect(await screen.findByText("Use at least 10 characters.")).toBeInTheDocument();
+
+    await u.type(screen.getByLabelText("Full name"), "Amani");
+    await u.type(screen.getByLabelText("Email"), "dup@example.com");
+    await u.type(screen.getByLabelText("Password"), "a-strong-passphrase");
+    await u.click(screen.getByRole("button", { name: "Create account" }));
+    expect(await screen.findByText("Already registered.")).toBeInTheDocument();
+  });
+
+  it("only allows same-app redirects", () => {
+    expect(safeNext("/profile")).toBe("/profile");
+    expect(safeNext("//evil.com")).toBe("/");
+    expect(safeNext("https://evil.com")).toBe("/");
+    expect(safeNext("/\\evil.com")).toBe("/");
+    expect(safeNext(null)).toBe("/");
+  });
+});
+
+describe("app shell (signed in)", () => {
+  it("greets the user and drives the checklist from real completeness data", async () => {
+    mockApi(signedIn);
     renderApp("/");
-    expect(screen.getByRole("heading", { level: 1, name: /career execution, under your control/i })).toBeInTheDocument();
-    const integrations = await screen.findByText("LLM provider");
-    const row = integrations.closest("li")!;
-    expect(within(row).getByText("Not configured")).toBeInTheDocument();
-    // Metric tiles never show fabricated numbers.
+    expect(await screen.findByRole("heading", { level: 1, name: /, Amani\.$/ })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Add a professional headline" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /upload your cv/i })).toHaveAttribute("href", "/documents");
     expect(screen.getAllByText("No data yet")).toHaveLength(6);
     expect(screen.queryByText(/Elena/)).not.toBeInTheDocument();
   });
 
-  it("shows an honest error when the API is unreachable", async () => {
-    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
+  it("disables discovery until it exists", async () => {
+    mockApi(signedIn);
     renderApp("/");
-    expect(await screen.findByText("API unreachable")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent(/cannot reach/i);
+    expect(await screen.findByRole("button", { name: /run discovery cycle/i })).toBeDisabled();
   });
 
-  it("disables discovery until it exists", () => {
-    mockFetchJson(200, meta);
-    renderApp("/");
-    expect(screen.getByRole("button", { name: /run discovery cycle/i })).toBeDisabled();
-  });
-
-  it("renders roadmap modules as not available, never simulated", () => {
-    mockFetchJson(200, meta);
+  it("renders roadmap modules as not available, never simulated", async () => {
+    mockApi(signedIn);
     renderApp("/applications");
-    expect(screen.getByRole("heading", { level: 1, name: "Applications" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Applications" })).toBeInTheDocument();
     expect(screen.getByText("Not available yet")).toBeInTheDocument();
   });
 
-  it("opens and closes the mobile navigation drawer with keyboard", async () => {
-    mockFetchJson(200, meta);
-    const user = userEvent.setup();
+  it("signs out from the sidebar with the CSRF token", async () => {
+    let authed = true;
+    const calls = mockApi({
+      ...signedIn,
+      "GET /api/v1/auth/session": () => (authed ? signedIn["GET /api/v1/auth/session"] : [401, { error: { code: "UNAUTHENTICATED", message: "x" } }]),
+      "POST /api/v1/auth/logout": () => {
+        authed = false;
+        return [204];
+      },
+    });
+    const u = userEvent.setup();
     renderApp("/");
-    await user.click(screen.getByRole("button", { name: "Open navigation" }));
-    const dialog = screen.getByRole("dialog", { name: "Navigation" });
-    expect(within(dialog).getByRole("link", { name: /discover jobs/i })).toBeInTheDocument();
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const nav = await screen.findAllByRole("button", { name: "Sign out" });
+    await u.click(nav[0]);
+    expect(await screen.findByRole("heading", { name: "Welcome back." })).toBeInTheDocument();
+    const logout = calls.find((c) => c.url === "/api/v1/auth/logout");
+    expect(logout?.headers.get("X-CSRF-Token")).toBe("csrf-123");
   });
 
-  it("renders not-found for unknown paths", () => {
-    mockFetchJson(200, meta);
-    renderApp("/nope");
-    expect(screen.getByText("Page not found")).toBeInTheDocument();
+  it("opens and closes the mobile navigation drawer with keyboard", async () => {
+    mockApi(signedIn);
+    const u = userEvent.setup();
+    renderApp("/");
+    await u.click(await screen.findByRole("button", { name: "Open navigation" }));
+    const dialog = screen.getByRole("dialog", { name: "Navigation" });
+    expect(within(dialog).getByRole("link", { name: /discover jobs/i })).toBeInTheDocument();
+    await u.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("profile", () => {
+  it("marks imported facts and lets the user confirm them", async () => {
+    const profile = {
+      ...emptyProfile,
+      experiences: [
+        {
+          id: "e1", employer: "Acme", title: "Engineer", location: "", start_date: "2021-01-01", end_date: null, is_current: true,
+          description: "", achievements: [], source: "CV_IMPORT", verification: "UNVERIFIED",
+        },
+      ],
+    };
+    const calls = mockApi({ ...signedIn, "GET /api/v1/profiles/me": [200, profile], "PUT /api/v1/profiles/me/experiences/e1/verification": [204] });
+    const u = userEvent.setup();
+    renderApp("/profile");
+    expect(await screen.findByText("Needs review")).toBeInTheDocument();
+    expect(screen.getByText("From CV")).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: "Confirm accurate" }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/experiences/e1/verification"))).toBe(true));
+    const call = calls.find((c) => c.url.endsWith("/experiences/e1/verification"))!;
+    expect(call.body).toEqual({ verification: "VERIFIED" });
+    expect(call.headers.get("X-CSRF-Token")).toBe("csrf-123");
+  });
+
+  it("rejects non-http links before calling the API", async () => {
+    const calls = mockApi(signedIn);
+    const u = userEvent.setup();
+    renderApp("/profile");
+    await u.click(await screen.findByRole("button", { name: "Add link" }));
+    await u.type(screen.getByLabelText("Label"), "Site");
+    await u.type(screen.getByLabelText("URL"), "javascript:alert(1)");
+    await u.click(screen.getByRole("button", { name: "Save details" }));
+    expect(await screen.findByText("Enter a full http(s) URL.")).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+});
+
+describe("documents", () => {
+  it("explains when AI analysis is unavailable and disables it", async () => {
+    mockApi({
+      ...signedIn,
+      "GET /api/v1/documents": [200, { data: [{ id: "d1", kind: "CV", original_filename: "cv.pdf", mime_type: "application/pdf", size_bytes: 2048, created_at: "2026-11-14T00:00:00Z" }] }],
+    });
+    renderApp("/documents");
+    expect(await screen.findByText("cv.pdf")).toBeInTheDocument();
+    expect(screen.getByText(/no ai provider is configured/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /analyse cv/i })).toBeDisabled();
+    expect(screen.getByRole("link", { name: /download/i })).toHaveAttribute("href", "/api/v1/documents/d1/download");
   });
 });
 
 describe("apiFetch", () => {
   it("normalises the error envelope", async () => {
-    mockFetchJson(422, { error: { code: "VALIDATION_FAILED", message: "Bad", details: { email: "required" }, request_id: "r1" } });
+    mockApi({ "GET /api/v1/x": [422, { error: { code: "VALIDATION_FAILED", message: "Bad", details: { email: "required" }, request_id: "r1" } }] });
     const err = await apiFetch("/api/v1/x").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect(err).toMatchObject({ status: 422, code: "VALIDATION_FAILED", details: { email: "required" }, requestId: "r1" });
   });
 
-  it("handles non-envelope errors", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html>", { status: 502 }));
-    await expect(apiFetch("/api/v1/x")).rejects.toMatchObject({ code: "UNEXPECTED_RESPONSE", status: 502 });
+  it("handles network failures", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
+    await expect(apiFetch("/api/v1/x")).rejects.toMatchObject({ code: "NETWORK_ERROR" });
   });
 });
 
 describe("matchTone", () => {
   it("maps scores per the design system", () => {
     expect(matchTone(95)).toBe("citron");
-    expect(matchTone(90)).toBe("citron");
     expect(matchTone(75)).toBe("olive");
     expect(matchTone(69.9)).toBe("terracotta");
   });

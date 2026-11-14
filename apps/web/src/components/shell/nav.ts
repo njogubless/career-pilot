@@ -36,13 +36,13 @@ export const navGroups: NavGroup[] = [
   {
     label: "Dossier & Systems",
     items: [
-      { path: "/documents", label: "Documents & CVs", icon: "description", title: "Documents & CVs", phase: 2, built: false,
+      { path: "/documents", label: "Documents & CVs", icon: "description", title: "Documents & CVs", phase: 2, built: true,
         summary: "Uploaded CVs, tailored versions and generated documents." },
-      { path: "/profile", label: "Professional Profile", icon: "verified_user", title: "Professional Profile", phase: 2, built: false,
+      { path: "/profile", label: "Professional Profile", icon: "verified_user", title: "Professional Profile", phase: 2, built: true,
         summary: "Experience, education, skills and preferences, with verification status for every fact." },
       { path: "/automation", label: "Automation Centre", icon: "smart_toy", title: "Automation Centre", phase: 8, built: false,
         summary: "Automation modes, permissions, daily limits, schedules and the global kill switch." },
-      { path: "/settings", label: "Settings", icon: "tune", title: "Settings", phase: 2, built: false,
+      { path: "/settings", label: "Settings", icon: "tune", title: "Settings", phase: 2, built: true,
         summary: "Account, security, integrations, notifications, privacy and data export." },
     ],
   },

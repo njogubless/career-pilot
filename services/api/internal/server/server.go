@@ -10,18 +10,26 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/careerpilot/careerpilot/services/api/internal/aiclient"
+	"github.com/careerpilot/careerpilot/services/api/internal/auth"
+	"github.com/careerpilot/careerpilot/services/api/internal/documents"
 	"github.com/careerpilot/careerpilot/services/api/internal/health"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/httpx"
+	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
 )
 
 // Deps are the collaborators the router needs. Nil optional deps are reported
-// honestly as not configured.
+// honestly as not configured, and their routes are not mounted.
 type Deps struct {
-	Config   config.Config
-	Logger   *slog.Logger
-	Checkers []health.Checker
-	AI       *aiclient.Client // nil when AI_SERVICE_URL is unset
+	Config    config.Config
+	Logger    *slog.Logger
+	Checkers  []health.Checker
+	AI        *aiclient.Client // nil when AI_SERVICE_URL is unset
+	Auth      *auth.HTTP
+	Profiles  *profiles.HTTP
+	Documents *documents.HTTP
+	// StorageReady reports whether document storage is configured.
+	StorageReady bool
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -31,7 +39,6 @@ func NewRouter(d Deps) http.Handler {
 		httpx.Recover,
 		httpx.AccessLog,
 		httpx.SecurityHeaders(d.Config.IsProduction()),
-		httpx.MaxBody(d.Config.MaxBodyBytes),
 	)
 
 	h := health.NewHandler(d.Config.Version, 3*time.Second, d.Checkers...)
@@ -39,7 +46,34 @@ func NewRouter(d Deps) http.Handler {
 	r.Get("/readyz", h.Ready)
 
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Get("/meta", metaHandler(d))
+		if d.Auth != nil {
+			r.Use(d.Auth.LoadSession)
+		}
+		r.Group(func(r chi.Router) {
+			r.Use(httpx.MaxBody(d.Config.MaxBodyBytes))
+			r.Get("/meta", metaHandler(d))
+			if d.Auth == nil {
+				return
+			}
+			d.Auth.PublicRoutes(r)
+			r.Group(func(r chi.Router) {
+				r.Use(d.Auth.RequireAuth)
+				d.Auth.PrivateRoutes(r)
+				if d.Profiles != nil {
+					d.Profiles.Routes(r)
+				}
+				if d.Documents != nil {
+					d.Documents.Routes(r)
+				}
+			})
+		})
+		if d.Auth != nil && d.Documents != nil {
+			r.Group(func(r chi.Router) {
+				// Multipart overhead allowance on top of the file limit.
+				r.Use(httpx.MaxBody(d.Config.MaxUploadBytes+64<<10), d.Auth.RequireAuth)
+				d.Documents.UploadRoutes(r)
+			})
+		}
 	})
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
@@ -75,14 +109,19 @@ type metaResponse struct {
 
 func metaHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		storage := integration{Status: StatusAvailable}
+		if !d.StorageReady {
+			storage = integration{Status: StatusNotConfigured, Detail: "Document uploads are disabled until S3 storage is configured."}
+		}
 		resp := metaResponse{
 			Version:     d.Config.Version,
 			Environment: string(d.Config.Env),
 			Integrations: map[string]integration{
-				"ai_service":  aiStatus(r.Context(), d.AI, "service"),
-				"llm":         aiStatus(r.Context(), d.AI, "llm"),
-				"job_sources": {Status: StatusNotImplemented, Detail: "Planned for Phase 3."},
-				"gmail":       {Status: StatusNotImplemented, Detail: "Planned for Phase 7."},
+				"ai_service":       aiStatus(r.Context(), d.AI, "service"),
+				"llm":              aiStatus(r.Context(), d.AI, "llm"),
+				"document_storage": storage,
+				"job_sources":      {Status: StatusNotImplemented, Detail: "Planned for Phase 3."},
+				"gmail":            {Status: StatusNotImplemented, Detail: "Planned for Phase 7."},
 			},
 		}
 		httpx.WriteJSON(w, http.StatusOK, resp)

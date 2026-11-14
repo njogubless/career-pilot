@@ -59,6 +59,13 @@ func TestDecodeJSONStrict(t *testing.T) {
 		"empty":         {``, false},
 		"malformed":     {`{"name":`, false},
 	}
+	t.Run("missing content type", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"a"}`))
+		var dst in
+		if err := DecodeJSON(r, &dst); err == nil {
+			t.Fatal("requests without application/json must be rejected (CSRF defence)")
+		}
+	})
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
@@ -82,7 +89,9 @@ func TestDecodeJSONTooLarge(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"a":"0123456789"}`)))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"a":"0123456789"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d", rec.Code)
 	}

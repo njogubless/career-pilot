@@ -54,7 +54,7 @@ func TestProductionRequiresSecrets(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected production validation to fail without secrets")
 	}
-	for _, want := range []string{"SESSION_SECRET", "DATA_ENCRYPTION_KEY", "AI_SERVICE_TOKEN", "REDIS_URL", "S3_BUCKET"} {
+	for _, want := range []string{"SESSION_SECRET", "DATA_ENCRYPTION_KEY", "AI_SERVICE_TOKEN", "REDIS_URL", "S3_BUCKET", "SMTP_ADDR", "APP_BASE_URL"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error missing %s: %v", want, err)
 		}
@@ -71,7 +71,10 @@ func TestProductionAcceptsCompleteConfig(t *testing.T) {
 		"DATA_ENCRYPTION_KEY": key,
 		"AI_SERVICE_URL":      "http://ai:8090",
 		"AI_SERVICE_TOKEN":    strings.Repeat("t", 32),
+		"S3_ENDPOINT":         "s3:8333",
 		"S3_BUCKET":           "b", "S3_ACCESS_KEY": "a", "S3_SECRET_KEY": "s",
+		"APP_BASE_URL": "https://app.example.com",
+		"SMTP_ADDR":    "smtp.example.com:587", "SMTP_FROM": "noreply@example.com",
 	}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

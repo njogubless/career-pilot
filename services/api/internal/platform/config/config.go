@@ -51,6 +51,27 @@ type Config struct {
 	S3AccessKey string
 	S3SecretKey string
 	S3UseSSL    bool
+
+	// AppBaseURL is the public origin of the web app, used in emailed links.
+	AppBaseURL string
+	// CookieSecure sets the Secure flag on session cookies (always true in production).
+	CookieSecure bool
+	// TrustProxyHeaders makes the API take the client IP from the last
+	// X-Forwarded-For entry. Enable only behind a trusted reverse proxy.
+	TrustProxyHeaders bool
+	SessionIdleTTL    time.Duration
+	SessionAbsTTL     time.Duration
+	MaxUploadBytes    int64
+
+	SMTPAddr     string
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+}
+
+// StorageConfigured reports whether object storage settings are present.
+func (c Config) StorageConfigured() bool {
+	return c.S3Endpoint != "" && c.S3Bucket != "" && c.S3AccessKey != "" && c.S3SecretKey != ""
 }
 
 func (c Config) IsProduction() bool { return c.Env == EnvProduction }
@@ -86,7 +107,19 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		S3AccessKey: r.str("S3_ACCESS_KEY", ""),
 		S3SecretKey: r.str("S3_SECRET_KEY", ""),
 		S3UseSSL:    r.bool("S3_USE_SSL", false),
+
+		AppBaseURL:        strings.TrimRight(r.str("APP_BASE_URL", "http://localhost:5173"), "/"),
+		TrustProxyHeaders: r.bool("TRUST_PROXY_HEADERS", false),
+		SessionIdleTTL:    r.duration("SESSION_IDLE_TTL", 7*24*time.Hour),
+		SessionAbsTTL:     r.duration("SESSION_ABSOLUTE_TTL", 30*24*time.Hour),
+		MaxUploadBytes:    r.int64("MAX_UPLOAD_BYTES", 10<<20),
+
+		SMTPAddr:     r.str("SMTP_ADDR", ""),
+		SMTPUsername: r.str("SMTP_USERNAME", ""),
+		SMTPPassword: r.str("SMTP_PASSWORD", ""),
+		SMTPFrom:     r.str("SMTP_FROM", ""),
 	}
+	c.CookieSecure = r.bool("COOKIE_SECURE", c.Env == EnvProduction)
 
 	if raw := r.str("DATA_ENCRYPTION_KEY", ""); raw != "" {
 		key, err := base64.StdEncoding.DecodeString(raw)
@@ -131,7 +164,29 @@ func (c Config) validate() []error {
 		errs = append(errs, errors.New("DATA_ENCRYPTION_KEY: must decode to exactly 32 bytes"))
 	}
 
+	if u, err := url.Parse(c.AppBaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		errs = append(errs, errors.New("APP_BASE_URL: must be an absolute http(s) URL"))
+	}
+	if c.SessionIdleTTL <= 0 || c.SessionAbsTTL < c.SessionIdleTTL {
+		errs = append(errs, errors.New("SESSION_IDLE_TTL / SESSION_ABSOLUTE_TTL: must be positive and absolute >= idle"))
+	}
+	if c.MaxUploadBytes < 1024 || c.MaxUploadBytes > 50<<20 {
+		errs = append(errs, errors.New("MAX_UPLOAD_BYTES: must be between 1 KiB and 50 MiB"))
+	}
+	if (c.SMTPAddr == "") != (c.SMTPFrom == "") {
+		errs = append(errs, errors.New("SMTP_ADDR and SMTP_FROM: set both or neither"))
+	}
+
 	if c.Env == EnvProduction {
+		if !c.CookieSecure {
+			errs = append(errs, errors.New("COOKIE_SECURE: cannot be disabled in production"))
+		}
+		if !strings.HasPrefix(c.AppBaseURL, "https://") {
+			errs = append(errs, errors.New("APP_BASE_URL: must use https in production"))
+		}
+		if c.SMTPAddr == "" {
+			errs = append(errs, errors.New("SMTP_ADDR and SMTP_FROM: required in production (password reset email)"))
+		}
 		if len(c.SessionSecret) < 32 {
 			errs = append(errs, errors.New("SESSION_SECRET: required in production (>= 32 chars)"))
 		}
@@ -144,8 +199,8 @@ func (c Config) validate() []error {
 		if c.RedisURL == "" {
 			errs = append(errs, errors.New("REDIS_URL: required in production"))
 		}
-		if c.S3Bucket == "" || c.S3AccessKey == "" || c.S3SecretKey == "" {
-			errs = append(errs, errors.New("S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY: required in production"))
+		if !c.StorageConfigured() {
+			errs = append(errs, errors.New("S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY: required in production"))
 		}
 	}
 	return errs

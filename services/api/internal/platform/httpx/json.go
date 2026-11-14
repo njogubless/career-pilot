@@ -21,7 +21,10 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 // dst. Unknown fields and trailing data are rejected. Body size is bounded by
 // the MaxBody middleware.
 func DecodeJSON(r *http.Request, dst any) error {
-	if ct := r.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "application/json") {
+	// Requiring application/json (which cross-site HTML forms cannot send
+	// without a CORS preflight) is part of our CSRF defence for endpoints that
+	// run before a session exists, such as login and registration.
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		return NewError(CodeValidationFailed, "Content-Type must be application/json.")
 	}
 	dec := json.NewDecoder(r.Body)

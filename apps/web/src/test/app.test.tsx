@@ -74,14 +74,23 @@ describe("app shell (signed in)", () => {
     expect(await screen.findByRole("heading", { level: 1, name: /, Amani\.$/ })).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: "Add a professional headline" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /upload your cv/i })).toHaveAttribute("href", "/documents");
-    expect(screen.getAllByText("No data yet")).toHaveLength(6);
+    expect(screen.getAllByText("No data yet")).toHaveLength(5); // "Discovered" is live since Phase 3
     expect(screen.queryByText(/Elena/)).not.toBeInTheDocument();
   });
 
-  it("disables discovery until it exists", async () => {
+  it("queues a discovery cycle with the CSRF token and shows the result", async () => {
+    const calls = mockApi({ ...signedIn, "POST /api/v1/discovery/runs": [202, { queued: true, message: "Discovery cycle queued." }] });
+    const u = userEvent.setup();
+    renderApp("/");
+    await u.click(await screen.findByRole("button", { name: /run discovery cycle/i }));
+    expect(await screen.findByText("Discovery cycle queued.")).toBeInTheDocument();
+    expect(calls.find((c) => c.url === "/api/v1/discovery/runs")?.headers.get("X-CSRF-Token")).toBe("csrf-123");
+  });
+
+  it("shows live discovered-job counts", async () => {
     mockApi(signedIn);
     renderApp("/");
-    expect(await screen.findByRole("button", { name: /run discovery cycle/i })).toBeDisabled();
+    expect(await screen.findByText("+5 in 24h")).toBeInTheDocument();
   });
 
   it("renders roadmap modules as not available, never simulated", async () => {

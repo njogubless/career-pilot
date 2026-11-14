@@ -4,6 +4,7 @@ import { Tag, type TagTone } from "../components/ui/Tag";
 import { Icon } from "../components/ui/Icon";
 import { Loading } from "../components/ui/Loading";
 import { useMeta, type IntegrationStatus } from "../lib/meta";
+import { useOverview } from "../lib/jobs";
 import { useProfile } from "../lib/profile";
 import { useSession } from "../lib/session";
 
@@ -80,8 +81,10 @@ function SetupChecklist() {
           </li>
         ))}
         <li className="flex items-center justify-between gap-space-md px-space-md py-space-sm">
-          <span className="text-title-md text-on-surface-variant">Run your first discovery cycle</span>
-          <Tag tone="outline">Phase 3</Tag>
+          <Link to="/discover" className="text-title-md text-on-surface underline-offset-4 hover:underline">
+            Browse discovered opportunities
+          </Link>
+          <Tag tone="outline">Match scores: Phase 4</Tag>
         </li>
       </ol>
     </>
@@ -91,6 +94,7 @@ function SetupChecklist() {
 export function OverviewPage() {
   const meta = useMeta();
   const session = useSession();
+  const overview = useOverview();
   const firstName = session.data?.display_name.split(/\s+/)[0];
 
   return (
@@ -110,20 +114,32 @@ export function OverviewPage() {
       </Panel>
 
       <section aria-label="Key metrics" className="grid grid-cols-2 gap-space-sm md:grid-cols-3 xl:grid-cols-6">
-        {metrics.map((m) => (
-          <div key={m.label} className="flex flex-col justify-between rounded-sm border border-stone bg-surface-container-lowest p-space-md">
-            <div className="flex items-center justify-between text-outline">
-              <span className="label-caps">{m.label}</span>
-              <Icon name={m.icon} size={16} />
-            </div>
-            <div className="mt-space-sm">
-              <div className="font-mono text-data-metric text-outline-variant" aria-label="No data yet">
-                —
+        {metrics.map((m) => {
+          const live = m.label === "Discovered" && overview.data ? overview.data : null;
+          return (
+            <div key={m.label} className="flex flex-col justify-between rounded-sm border border-stone bg-surface-container-lowest p-space-md">
+              <div className="flex items-center justify-between text-outline">
+                <span className="label-caps">{m.label}</span>
+                <Icon name={m.icon} size={16} />
               </div>
-              <div className="mt-0.5 font-mono text-label-sm text-muted">No data yet</div>
+              <div className="mt-space-sm">
+                {live ? (
+                  <>
+                    <div className="font-mono text-data-metric text-on-surface">{live.jobs_active.toLocaleString()}</div>
+                    <div className="mt-0.5 font-mono text-label-sm text-olive">+{live.jobs_new_24h} in 24h</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="font-mono text-data-metric text-outline-variant" aria-label="No data yet">
+                      —
+                    </div>
+                    <div className="mt-0.5 font-mono text-label-sm text-muted">No data yet</div>
+                  </>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </section>
 
       <div className="grid grid-cols-1 items-start gap-space-lg xl:grid-cols-12">
@@ -132,9 +148,17 @@ export function OverviewPage() {
             <div className="p-space-md">
               <SectionHeader eyebrow="Stage gate 01" title="Priority opportunities awaiting review" />
             </div>
-            <EmptyState icon="travel_explore" title="No opportunities yet">
-              Ranked opportunities appear here once your profile is complete and a discovery cycle has searched approved job
-              boards. Each one will show its match score, eligibility and the evidence behind it.
+            <EmptyState
+              icon="travel_explore"
+              title="Ranking arrives with matching"
+              action={
+                <Link to="/discover" className="text-title-md text-on-surface underline underline-offset-4">
+                  Browse {overview.data ? overview.data.jobs_active.toLocaleString() : ""} discovered jobs
+                </Link>
+              }
+            >
+              Opportunities are being discovered from approved job boards. Ranking against your verified profile, with eligibility and the
+              evidence behind each score, arrives in Phase 4.
             </EmptyState>
           </Panel>
 

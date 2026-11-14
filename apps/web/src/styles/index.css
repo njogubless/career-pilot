@@ -160,6 +160,41 @@
     line-height: 1;
     user-select: none;
   }
+  /* Sanitised third-party job descriptions. */
+  .job-prose {
+    font-size: var(--text-body-md);
+    line-height: var(--text-body-lg--line-height);
+    color: var(--color-on-surface-variant);
+    overflow-wrap: anywhere;
+  }
+  .job-prose :where(h1, h2, h3, h4) {
+    font-family: var(--font-serif);
+    color: var(--color-on-surface);
+    margin: 1.25rem 0 0.5rem;
+    font-size: var(--text-headline-sm);
+    line-height: var(--text-headline-sm--line-height);
+  }
+  .job-prose :where(p) {
+    margin: 0.5rem 0;
+  }
+  .job-prose :where(ul, ol) {
+    margin: 0.5rem 0;
+    padding-left: 1.25rem;
+    list-style: disc;
+  }
+  .job-prose :where(ol) {
+    list-style: decimal;
+  }
+  .job-prose :where(a) {
+    color: var(--color-on-surface);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .job-prose :where(strong, b) {
+    color: var(--color-on-surface);
+    font-weight: 600;
+  }
+
   /* Uppercase mono micro-label for system state (DESIGN.md typographic rules). */
   .label-caps {
     font-family: var(--font-mono);

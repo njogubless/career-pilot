@@ -21,7 +21,7 @@ export const navGroups: NavGroup[] = [
     items: [
       { path: "/", label: "Overview", icon: "dashboard", title: "Overview", phase: 1, built: true,
         summary: "Career overview, priority opportunities, pipeline and agent activity." },
-      { path: "/discover", label: "Discover Jobs", icon: "travel_explore", title: "Opportunity Directory", phase: 3, built: false,
+      { path: "/discover", label: "Discover Jobs", icon: "travel_explore", title: "Opportunity Directory", phase: 3, built: true,
         summary: "Search and rank jobs from approved public job boards with eligibility and match scores." },
       { path: "/intelligence", label: "AI Intelligence", icon: "psychology", title: "Intelligence Centre", phase: 8, built: false,
         summary: "Agent activity, workflow history, tool executions, approval requests and recovery." },
@@ -51,5 +51,9 @@ export const navGroups: NavGroup[] = [
 export const allNavItems = navGroups.flatMap((g) => g.items);
 
 export function findNavItem(pathname: string): NavItem | undefined {
+  if (pathname.startsWith("/jobs/")) {
+    const discover = allNavItems.find((i) => i.path === "/discover");
+    return discover && { ...discover, title: "Job Dossier" };
+  }
   return allNavItems.find((i) => (i.path === "/" ? pathname === "/" : pathname.startsWith(i.path)));
 }

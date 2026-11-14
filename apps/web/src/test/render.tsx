@@ -16,7 +16,7 @@ export function renderApp(path = "/") {
   return { ...utils, router };
 }
 
-type Reply = [status: number, body?: unknown];
+export type Reply = [status: number, body?: unknown];
 type Handler = Reply | ((init: RequestInit, url: string) => Reply);
 export type Call = { method: string; url: string; headers: Headers; body: unknown };
 
@@ -87,4 +87,5 @@ export const signedIn = {
   "GET /api/v1/auth/session": [200, { user, csrf_token: "csrf-123" }] as Reply,
   "GET /api/v1/meta": [200, meta] as Reply,
   "GET /api/v1/profiles/me": [200, emptyProfile] as Reply,
+  "GET /api/v1/dashboard/overview": [200, { jobs_active: 42, jobs_new_24h: 5, sources_total: 3, sources_healthy: 3, last_discovery_at: null }] as Reply,
 };

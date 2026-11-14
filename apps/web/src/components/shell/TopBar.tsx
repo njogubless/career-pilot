@@ -1,4 +1,7 @@
+import { useEffect, useState } from "react";
 import { useLocation } from "react-router";
+import { ApiError } from "../../lib/api";
+import { useTriggerDiscovery } from "../../lib/jobs";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { findNavItem } from "./nav";
@@ -6,6 +9,13 @@ import { findNavItem } from "./nav";
 export function TopBar({ onOpenMenu, menuOpen }: { onOpenMenu: () => void; menuOpen: boolean }) {
   const { pathname } = useLocation();
   const current = findNavItem(pathname);
+  const trigger = useTriggerDiscovery();
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   return (
     <header className="sticky top-0 z-30 h-16 border-b border-stone bg-surface/90 backdrop-blur">
@@ -35,9 +45,23 @@ export function TopBar({ onOpenMenu, menuOpen }: { onOpenMenu: () => void; menuO
             <span aria-hidden className="h-2 w-2 rounded-full bg-outline-variant" />
             Agent loop: not enabled
           </span>
-          {/* Disabled until job discovery exists (Phase 3): never a button that silently does nothing. */}
-          <Button icon="bolt" iconClassName="text-secondary-fixed" disabled title="Available once job discovery is enabled (Phase 3)">
-            <span className="hidden sm:inline">Run Discovery Cycle</span>
+          {notice && (
+            <span role="status" className="hidden max-w-xs truncate text-body-sm text-on-surface-variant lg:inline" title={notice}>
+              {notice}
+            </span>
+          )}
+          <Button
+            icon="bolt"
+            iconClassName="text-secondary-fixed"
+            disabled={trigger.isPending}
+            onClick={() =>
+              trigger.mutate(undefined, {
+                onSuccess: (r) => setNotice(r.message),
+                onError: (e) => setNotice(e instanceof ApiError ? e.message : "Could not start discovery."),
+              })
+            }
+          >
+            <span className="hidden sm:inline">{trigger.isPending ? "Queuing…" : "Run Discovery Cycle"}</span>
             <span className="sm:hidden">Discover</span>
           </Button>
         </div>

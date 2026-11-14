@@ -1,11 +1,13 @@
 import clsx from "clsx";
 import { NavLink } from "react-router";
 import { Icon } from "../ui/Icon";
+import { useOverview } from "../../lib/jobs";
 import { navGroups } from "./nav";
 import { SystemStatusCard } from "./SystemStatusCard";
 import { UserCard } from "./UserCard";
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+  const overview = useOverview();
   return (
     <div className="flex h-full flex-col bg-primary-container text-surface">
       <div className="flex h-16 items-center justify-between px-space-md">
@@ -50,6 +52,11 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                           <Icon name={item.icon} className={isActive ? "text-graphite" : "text-outline-variant group-hover:text-surface"} />
                           <span className="text-title-md">{item.label}</span>
                         </span>
+                        {item.path === "/discover" && overview.data && overview.data.jobs_active > 0 && (
+                          <span className="label-caps rounded-xs bg-secondary-fixed px-1.5 py-0.5 font-bold text-on-secondary-fixed">
+                            {overview.data.jobs_active > 999 ? "999+" : overview.data.jobs_active}
+                          </span>
+                        )}
                         {!item.built && (
                           <span className={clsx("label-caps", isActive ? "text-outline" : "text-outline-variant/70")}>
                             Phase {item.phase}

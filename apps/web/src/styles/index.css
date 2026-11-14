@@ -1,0 +1,172 @@
+/*
+ * Editorial Intelligence design system.
+ * Tokens are taken from stitch_careerpilot_ai_platform_design/editorial_intelligence/DESIGN.md.
+ * Token names mirror the Stitch Tailwind config so Stitch markup ports directly.
+ * Where config and prose disagree, the prose wins (ADR-012): 4px default radius.
+ */
+@import "tailwindcss";
+
+@import "@fontsource/newsreader/400.css";
+@import "@fontsource/newsreader/500.css";
+@import "@fontsource-variable/manrope/index.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/600.css";
+@import "material-symbols/outlined.css";
+
+@theme {
+  /* ---- Material-role palette (Stitch config) ---- */
+  --color-surface: #fcf9f0;
+  --color-surface-dim: #dddad1;
+  --color-surface-bright: #fcf9f0;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f6f3ea;
+  --color-surface-container: #f1eee5;
+  --color-surface-container-high: #ebe8df;
+  --color-surface-container-highest: #e5e2da;
+  --color-surface-variant: #e5e2da;
+  --color-on-surface: #1c1c17;
+  --color-on-surface-variant: #444843;
+  --color-inverse-surface: #31312b;
+  --color-inverse-on-surface: #f4f1e8;
+  --color-outline: #757873;
+  --color-outline-variant: #c5c7c1;
+  --color-primary: #000100;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #191d19;
+  --color-on-primary-container: #818580;
+  --color-primary-fixed: #e0e3dd;
+  --color-primary-fixed-dim: #c4c8c1;
+  --color-secondary: #596400;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #daed5d;
+  --color-on-secondary-container: #5f6a00;
+  --color-secondary-fixed: #daed5d;
+  --color-secondary-fixed-dim: #bfd043;
+  --color-on-secondary-fixed: #1a1e00;
+  --color-tertiary-container: #3a0c00;
+  --color-on-tertiary-container: #ce6642;
+  --color-tertiary-fixed: #ffdbd0;
+  --color-error: #ba1a1a;
+  --color-on-error: #ffffff;
+  --color-error-container: #ffdad6;
+  --color-on-error-container: #93000a;
+  --color-background: #fcf9f0;
+
+  /* ---- Named brand colours (DESIGN.md prose) ---- */
+  --color-ivory: #f3f0e7;
+  --color-graphite: #191d19;
+  --color-citron: #c7d94b;
+  --color-terracotta: #d36a45;
+  --color-olive: #87917b;
+  --color-stone: #dcd8ce;
+  --color-muted: #6b6d65; /* prose #777970 darkened slightly to meet 4.5:1 on ivory */
+
+  /* ---- Typography ---- */
+  --font-serif: "Newsreader", ui-serif, Georgia, serif;
+  --font-sans: "Manrope Variable", "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --text-display-lg: 48px;
+  --text-display-lg--line-height: 56px;
+  --text-display-lg--letter-spacing: -0.02em;
+  --text-display-lg-mobile: 32px;
+  --text-display-lg-mobile--line-height: 40px;
+  --text-display-lg-mobile--letter-spacing: -0.01em;
+  --text-headline-lg: 36px;
+  --text-headline-lg--line-height: 44px;
+  --text-headline-lg--letter-spacing: -0.015em;
+  --text-headline-lg-mobile: 26px;
+  --text-headline-lg-mobile--line-height: 34px;
+  --text-headline-md: 28px;
+  --text-headline-md--line-height: 36px;
+  --text-headline-md--letter-spacing: -0.01em;
+  --text-headline-md--font-weight: 500;
+  --text-headline-sm: 20px;
+  --text-headline-sm--line-height: 28px;
+  --text-headline-sm--font-weight: 500;
+  --text-title-lg: 18px;
+  --text-title-lg--line-height: 24px;
+  --text-title-lg--letter-spacing: -0.01em;
+  --text-title-lg--font-weight: 600;
+  --text-title-md: 15px;
+  --text-title-md--line-height: 20px;
+  --text-title-md--font-weight: 600;
+  --text-body-lg: 16px;
+  --text-body-lg--line-height: 26px;
+  --text-body-md: 14px;
+  --text-body-md--line-height: 22px;
+  --text-body-sm: 12px;
+  --text-body-sm--line-height: 18px;
+  --text-label-md: 12px;
+  --text-label-md--line-height: 16px;
+  --text-label-md--letter-spacing: 0.04em;
+  --text-label-md--font-weight: 500;
+  --text-label-sm: 10px;
+  --text-label-sm--line-height: 14px;
+  --text-label-sm--letter-spacing: 0.06em;
+  --text-label-sm--font-weight: 500;
+  --text-data-metric: 24px;
+  --text-data-metric--line-height: 28px;
+  --text-data-metric--letter-spacing: -0.02em;
+  --text-data-metric--font-weight: 600;
+
+  /* ---- Radius: architectural, never pill-shaped ---- */
+  --radius-xs: 0.125rem; /* chips, badges */
+  --radius-sm: 0.25rem;  /* containers, buttons, inputs */
+  --radius-DEFAULT: 0.25rem;
+
+  /* ---- Spacing ---- */
+  --spacing-space-xs: 0.25rem;
+  --spacing-space-sm: 0.5rem;
+  --spacing-space-md: 1rem;
+  --spacing-space-lg: 1.5rem;
+  --spacing-space-xl: 2.5rem;
+  --spacing-gutter: 1.25rem;
+  --spacing-gutter-desktop: 1.5rem;
+  --spacing-margin: 1rem;
+  --spacing-margin-desktop: 2.5rem;
+
+  /* ---- Elevation (top tier only) ---- */
+  --shadow-overlay: 0 8px 24px -4px rgba(25, 29, 25, 0.08);
+}
+
+@layer base {
+  html {
+    background: var(--color-surface);
+    color: var(--color-on-surface);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    margin: 0;
+    font-size: var(--text-body-md);
+    line-height: var(--text-body-md--line-height);
+  }
+  ::selection {
+    background: var(--color-secondary-container);
+    color: var(--color-on-secondary-fixed);
+  }
+  /* Crisp 1px focus outline, no diffuse glow (DESIGN.md: inputs & active states). */
+  :focus-visible {
+    outline: 2px solid var(--color-graphite);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .material-symbols-outlined {
+    font-size: 18px;
+    line-height: 1;
+    user-select: none;
+  }
+  /* Uppercase mono micro-label for system state (DESIGN.md typographic rules). */
+  .label-caps {
+    font-family: var(--font-mono);
+    font-size: var(--text-label-sm);
+    line-height: var(--text-label-sm--line-height);
+    letter-spacing: 0.08em;
+    font-weight: 500;
+    text-transform: uppercase;
+  }
+}

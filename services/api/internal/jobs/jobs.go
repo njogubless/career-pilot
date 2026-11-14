@@ -43,11 +43,12 @@ func NewInsertClient(pool *pgxpool.Pool, log *slog.Logger) (*Client, error) {
 }
 
 // NewWorkerClient returns a client that executes jobs (used by `careerpilot worker`).
-func NewWorkerClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logger, maxWorkers int) (*Client, error) {
+func NewWorkerClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logger, maxWorkers int, periodic ...*river.PeriodicJob) (*Client, error) {
 	c, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
-		Logger:  log,
-		Workers: workers,
-		Queues:  map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: maxWorkers}},
+		Logger:       log,
+		Workers:      workers,
+		Queues:       map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: maxWorkers}},
+		PeriodicJobs: periodic,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("river worker client: %w", err)

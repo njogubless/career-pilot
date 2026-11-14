@@ -1,0 +1,21 @@
+[
+  {"kind": "GREENHOUSE", "identifier": "gitlab", "display_name": "GitLab"},
+  {"kind": "GREENHOUSE", "identifier": "stripe", "display_name": "Stripe"},
+  {"kind": "GREENHOUSE", "identifier": "cloudflare", "display_name": "Cloudflare"},
+  {"kind": "GREENHOUSE", "identifier": "datadog", "display_name": "Datadog"},
+  {"kind": "GREENHOUSE", "identifier": "figma", "display_name": "Figma"},
+  {"kind": "GREENHOUSE", "identifier": "discord", "display_name": "Discord"},
+  {"kind": "GREENHOUSE", "identifier": "airbnb", "display_name": "Airbnb"},
+  {"kind": "GREENHOUSE", "identifier": "twilio", "display_name": "Twilio"},
+  {"kind": "GREENHOUSE", "identifier": "dropbox", "display_name": "Dropbox"},
+  {"kind": "GREENHOUSE", "identifier": "coinbase", "display_name": "Coinbase"},
+  {"kind": "LEVER", "identifier": "palantir", "display_name": "Palantir"},
+  {"kind": "LEVER", "identifier": "spotify", "display_name": "Spotify"},
+  {"kind": "ASHBY", "identifier": "ramp", "display_name": "Ramp"},
+  {"kind": "ASHBY", "identifier": "notion", "display_name": "Notion"},
+  {"kind": "ASHBY", "identifier": "linear", "display_name": "Linear"},
+  {"kind": "ASHBY", "identifier": "openai", "display_name": "OpenAI"},
+  {"kind": "ASHBY", "identifier": "vercel", "display_name": "Vercel"},
+  {"kind": "ASHBY", "identifier": "posthog", "display_name": "PostHog"},
+  {"kind": "REMOTEOK", "identifier": "remoteok", "display_name": "Remote OK", "min_interval_minutes": 240}
+]

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/microcosm-cc/bluemonday"
 )
@@ -308,4 +309,27 @@ func trimAll(ss []string) []string {
 // IsHTTPURL reports whether s is an absolute http(s) URL.
 func IsHTTPURL(s string) bool {
 	return strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "http://")
+}
+
+// RepairMojibake undoes UTF-8 text that was decoded as Latin-1 and encoded
+// again ("â\u0080\u0094" instead of "—"). It only rewrites strings made
+// entirely of runes ≤ U+00FF whose byte form is valid UTF-8 containing
+// multi-byte sequences, so correct text (including real accented Latin-1
+// letters, which rarely form valid UTF-8 sequences) is left unchanged.
+func RepairMojibake(s string) string {
+	hasHigh := false
+	b := make([]byte, 0, len(s))
+	for _, r := range s {
+		if r > 0xFF {
+			return s
+		}
+		if r >= 0x80 {
+			hasHigh = true
+		}
+		b = append(b, byte(r))
+	}
+	if !hasHigh || !utf8.Valid(b) {
+		return s
+	}
+	return string(b)
 }

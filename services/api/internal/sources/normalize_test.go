@@ -107,3 +107,18 @@ func TestEmploymentType(t *testing.T) {
 		}
 	}
 }
+
+func TestRepairMojibake(t *testing.T) {
+	cases := map[string]string{
+		"Senior Engineer \u00e2\u0080\u0094 Kubernetes": "Senior Engineer — Kubernetes",
+		"Caf\u00c3\u00a9 Engineer":                      "Café Engineer",
+		"Café Engineer":                                 "Café Engineer", // already correct Latin-1 text
+		"Plain ASCII":                                   "Plain ASCII",
+		"東京 — Tokyo":                                    "東京 — Tokyo", // real Unicode is never touched
+	}
+	for in, want := range cases {
+		if got := RepairMojibake(in); got != want {
+			t.Errorf("RepairMojibake(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

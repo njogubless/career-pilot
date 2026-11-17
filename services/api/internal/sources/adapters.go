@@ -340,6 +340,12 @@ func (a *remoteOKAdapter) Fetch(ctx context.Context, _ string) ([]Posting, error
 		if j.Legal != "" || j.ID == "" || j.Position == "" {
 			continue
 		}
+		// The API returns some fields double-encoded (UTF-8 read as Latin-1).
+		j.Position, j.Company, j.Location = RepairMojibake(j.Position), RepairMojibake(j.Company), RepairMojibake(j.Location)
+		j.Description = RepairMojibake(j.Description)
+		for i := range j.Tags {
+			j.Tags[i] = RepairMojibake(j.Tags[i])
+		}
 		loc := strings.TrimSpace(j.Location)
 		// Every Remote OK listing is remote by definition; the location field
 		// states where applicants may be (or is empty / a city).

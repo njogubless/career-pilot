@@ -61,6 +61,27 @@ func (c *Client) Do(method, path string, body any) Response {
 	return c.send(req)
 }
 
+// DoWithHeader sends a request with extra headers (e.g. Idempotency-Key).
+func (c *Client) DoWithHeader(method, path string, body any, headers map[string]string) Response {
+	c.t.Helper()
+	var rd io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			c.t.Fatal(err)
+		}
+		rd = bytes.NewReader(b)
+	}
+	req := httptest.NewRequest(method, path, rd)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return c.send(req)
+}
+
 // DoNoCSRF sends a request without the CSRF header (for negative tests).
 func (c *Client) DoNoCSRF(method, path string, body any) Response {
 	saved := c.CSRF

@@ -19,7 +19,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/careerpilot/careerpilot/services/api/internal/aiclient"
+	"github.com/careerpilot/careerpilot/services/api/internal/applications"
 	"github.com/careerpilot/careerpilot/services/api/internal/auth"
+	"github.com/careerpilot/careerpilot/services/api/internal/automation"
 	"github.com/careerpilot/careerpilot/services/api/internal/discovery"
 	"github.com/careerpilot/careerpilot/services/api/internal/documents"
 	"github.com/careerpilot/careerpilot/services/api/internal/jobs"
@@ -114,6 +116,8 @@ type App struct {
 	Matching  *matching.Service
 	// Preparation runs generation in tests (its worker has no insert client).
 	Preparation *preparation.Service
+	// Applications exposes the service for agent-actor tests.
+	Applications *applications.Service
 }
 
 // Options customise the app under test.
@@ -160,13 +164,15 @@ func New(t *testing.T, opts Options) *App {
 	matchSvc := matching.NewService(pool, ai, profSvc, log)
 	sched := &matching.Scheduler{Pool: pool, Queue: jobClient, Log: log}
 	prep := preparation.NewService(pool, ai, profSvc, jobClient, log)
+	appsSvc := applications.NewService(pool, automation.NewGuard(pool), matching.AlgorithmVersion, log)
 	h := server.NewRouter(server.Deps{Config: cfg, Logger: log, AI: ai, Auth: authH,
 		Profiles: profiles.NewHTTP(profSvc), Documents: docH, StorageReady: !opts.NoStorage,
 		Discovery: discovery.NewHTTP(disc, jobClient, ratelimit.NewMemory()), Listings: listings.NewHTTP(pool, matching.AlgorithmVersion),
 		Matching: matching.NewHTTP(matchSvc, sched, ratelimit.NewMemory()), MatchScheduler: sched,
-		Preparation: preparation.NewHTTP(prep, authH, ratelimit.NewMemory())})
+		Preparation:  preparation.NewHTTP(prep, authH, ratelimit.NewMemory()),
+		Applications: applications.NewHTTP(appsSvc, authH), Automation: automation.NewHTTP(automation.NewService(pool), authH)})
 	return &App{Handler: h, Pool: pool, Store: store, Mail: mail, Jobs: jobClient, AI: ai, Log: log, Discovery: disc, Matching: matchSvc,
-		Preparation: prep}
+		Preparation: prep, Applications: appsSvc}
 }
 
 // Exec runs SQL directly (assertions on persisted state).

@@ -756,6 +756,11 @@ func (s *Service) RevokeApproval(ctx context.Context, userID, docID uuid.UUID, i
 func (s *Service) Delete(ctx context.Context, userID, docID uuid.UUID, ip string) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `DELETE FROM application_documents WHERE id = $1 AND user_id = $2`, docID, userID)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return httpx.NewError(httpx.CodeConflict,
+				"This document is part of an approved application. Reopen or withdraw the application before deleting it.")
+		}
 		if err != nil {
 			return err
 		}

@@ -10,7 +10,9 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/careerpilot/careerpilot/services/api/internal/aiclient"
+	"github.com/careerpilot/careerpilot/services/api/internal/applications"
 	"github.com/careerpilot/careerpilot/services/api/internal/auth"
+	"github.com/careerpilot/careerpilot/services/api/internal/automation"
 	"github.com/careerpilot/careerpilot/services/api/internal/discovery"
 	"github.com/careerpilot/careerpilot/services/api/internal/documents"
 	"github.com/careerpilot/careerpilot/services/api/internal/health"
@@ -37,6 +39,9 @@ type Deps struct {
 	Matching  *matching.HTTP
 	// Preparation serves tailored application documents (Phase 5).
 	Preparation *preparation.HTTP
+	// Applications and Automation (Phase 6).
+	Applications *applications.HTTP
+	Automation   *automation.HTTP
 	// MatchScheduler recomputes matches after profile writes (nil disables).
 	MatchScheduler *matching.Scheduler
 	// StorageReady reports whether document storage is configured.
@@ -90,6 +95,12 @@ func NewRouter(d Deps) http.Handler {
 				}
 				if d.Preparation != nil {
 					d.Preparation.Routes(r)
+				}
+				if d.Applications != nil {
+					d.Applications.Routes(r)
+				}
+				if d.Automation != nil {
+					d.Automation.Routes(r)
 				}
 				if d.Discovery != nil {
 					r.Group(func(r chi.Router) {

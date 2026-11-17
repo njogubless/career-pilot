@@ -26,7 +26,9 @@ import (
 	"github.com/riverqueue/river"
 
 	"github.com/careerpilot/careerpilot/services/api/internal/aiclient"
+	"github.com/careerpilot/careerpilot/services/api/internal/applications"
 	"github.com/careerpilot/careerpilot/services/api/internal/auth"
+	"github.com/careerpilot/careerpilot/services/api/internal/automation"
 	"github.com/careerpilot/careerpilot/services/api/internal/discovery"
 	"github.com/careerpilot/careerpilot/services/api/internal/documents"
 	"github.com/careerpilot/careerpilot/services/api/internal/health"
@@ -246,6 +248,8 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	listH := listings.NewHTTP(in.pool, matching.AlgorithmVersion)
 	matchSched := &matching.Scheduler{Pool: in.pool, Queue: jobClient, Log: log}
 	matchH := matching.NewHTTP(matching.NewService(in.pool, in.ai, profSvc, log), matchSched, limiter)
+	appsH := applications.NewHTTP(applications.NewService(in.pool, automation.NewGuard(in.pool), matching.AlgorithmVersion, log), authH)
+	autoH := automation.NewHTTP(automation.NewService(in.pool), authH)
 	prepH := preparation.NewHTTP(preparation.NewService(in.pool, in.ai, profSvc, jobClient, log), authH, limiter)
 
 	srv := &http.Server{
@@ -254,6 +258,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			Config: cfg, Logger: log, Checkers: in.checkers, AI: in.ai,
 			Auth: authH, Profiles: profilesH, Documents: docH, StorageReady: in.store != nil,
 			Discovery: discH, Listings: listH, Matching: matchH, MatchScheduler: matchSched, Preparation: prepH,
+			Applications: appsH, Automation: autoH,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       cfg.HTTPReadTimeout,

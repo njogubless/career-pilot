@@ -15,6 +15,7 @@ REGISTRY: dict[str, tuple[str, str]] = {
     "cv_tailor": ("cv_tailor_v1.md", "1"),
     "cover_letter": ("cover_letter_v1.md", "1"),
     "app_answers": ("app_answers_v1.md", "1"),
+    "outreach_email": ("outreach_email_v1.md", "1"),
 }
 
 

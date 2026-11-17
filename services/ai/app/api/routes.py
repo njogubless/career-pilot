@@ -49,7 +49,7 @@ def info(request: Request, settings: Annotated[Settings, Depends(get_settings)])
     if embedder is not None:
         caps.append("embeddings")
     if settings.llm_configured:
-        caps += ["cv.extract", "jobs.analyze.llm", "documents.generate"]
+        caps += ["cv.extract", "jobs.analyze.llm", "documents.generate", "outreach.draft"]
     return Info(
         service="careerpilot-ai",
         version=settings.app_version,

@@ -16,7 +16,7 @@ from collections.abc import Iterable
 from app.documents.schemas import CLAIM_TYPES, Block, DocumentContent, Fact, Issue, ValidationReport
 from app.taxonomy import catalogue
 
-VALIDATOR_VERSION = "fact-check-1"
+VALIDATOR_VERSION = "fact-check-2"
 
 _NUMBER = re.compile(r"(?<![A-Za-z\d.])\d[\d,]*(?:\.\d+)?")
 _YEARS = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*\+?\s*(?:-\s*)?(?:years?|yrs?)\b", re.IGNORECASE)
@@ -79,10 +79,13 @@ class Validator:
                 s = cat.normalize(f.text)
                 if s:
                     self.supported_skills.add(s.slug)
-        # Numbers that are part of skill/certification names ("OAuth 2.0").
-        self.name_numbers = set().union(
-            *(_numbers(f.text) for f in facts if f.kind in ("skill", "certification"))
-        )
+        # Skill/certification names that contain digits ("OAuth 2.0", "AWS S3"):
+        # occurrences of these exact names are removed before checking figures,
+        # so "2" is allowed in "OAuth 2.0" but not in "2M events".
+        names = {f.text.strip() for f in facts if f.kind in ("skill", "certification") and _numbers(f.text)}
+        self.numbered_names = [
+            re.compile(re.escape(n), re.IGNORECASE) for n in sorted(names, key=len, reverse=True) if n
+        ]
 
     def support_text(self, refs: list[str]) -> str:
         if not refs:
@@ -168,8 +171,10 @@ class Validator:
                 )
             stripped = stripped.replace(m.group(0), " ")
 
+        for pat in self.numbered_names:
+            stripped = pat.sub(" ", stripped)
         support = self.support_text([r for r in b.refs if r in self.facts])
-        allowed = _numbers(support) | self.name_numbers
+        allowed = _numbers(support)
         for n in sorted(_numbers(stripped) - allowed):
             add(
                 "UNSUPPORTED_NUMBER",

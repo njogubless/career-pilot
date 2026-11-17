@@ -78,6 +78,11 @@ def test_invented_number_is_flagged_but_cited_number_is_not():
     assert r.status == "FAILED"
 
 
+def test_skill_name_digits_do_not_whitelist_other_figures():
+    r = check(Block(id="b1", type="bullet", text="Scaled OAuth 2.0 logins to 2M users.", refs=["exp:1"]))
+    assert [i.excerpt for i in r.issues if i.code == "UNSUPPORTED_NUMBER"] == ["2"]
+
+
 def test_numbers_inside_skill_names_and_dates_are_allowed():
     r = check(
         Block(id="b1", type="bullet", text="Built OAuth 2.0 flows at Acme Pay since 2019.", refs=["exp:1"])
@@ -306,4 +311,52 @@ def test_validate_endpoint_and_info():
     assert r.status_code == 200 and r.json()["status"] == "FAILED"
     info = c.get("/internal/v1/info", headers=AUTH).json()
     assert "documents.validate" in info["capabilities"] and "documents.generate" not in info["capabilities"]
-    assert info["analyzer_versions"]["documents.validator"].startswith("fact-check-1+")
+    assert info["analyzer_versions"]["documents.validator"].startswith("fact-check-2+")
+
+
+def test_outreach_draft_removes_fabrication_and_never_invents_names():
+    from app.documents.outreach import Contact, draft_email
+
+    raw = {
+        "subject": "Staff Backend Engineer: Go and payments",
+        "greeting": "Hi Sarah,",  # no name recorded: must not be used
+        "paragraphs": [
+            {"text": "I cut ledger costs by 40% in Go.", "refs": ["E1.A1"]},
+            {"text": "I also scaled Kafka to 2M events per second.", "refs": ["E1"]},  # fabricated
+        ],
+        "sign_off": "Best regards,",
+        "questions": [],
+    }
+    e = draft_email(
+        kind="INTRODUCTION",
+        job=JOB,
+        facts=FACTS,
+        candidate=CANDIDATE,
+        contact=Contact(),
+        provider=_Scripted(raw),
+    )
+    assert e.greeting == "Hello,"
+    assert e.paragraphs == ["I cut ledger costs by 40% in Go."]
+    assert any("removed" in w for w in e.warnings)
+    assert e.prompt_id == "outreach_email@1"
+
+
+def test_outreach_endpoint_with_fake_provider():
+    c = client(ai_provider=ProviderName.FAKE)
+    body = {
+        "kind": "INTRODUCTION",
+        "job": JOB.model_dump(),
+        "facts": [f.model_dump() for f in FACTS],
+        "candidate": CANDIDATE.model_dump(),
+        "contact": {"name": "Jane Doe", "title": "Technical Recruiter", "company": "Acme"},
+    }
+    r = c.post("/internal/v1/outreach/draft", headers=AUTH, json=body)
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert (
+        out["greeting"] == "Hi Jane,"
+        and out["subject"]
+        and out["usage"]["prompt_version"] == "outreach_email@1"
+    )
+    r = client().post("/internal/v1/outreach/draft", headers=AUTH, json=body)
+    assert r.status_code == 503

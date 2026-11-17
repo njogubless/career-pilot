@@ -8,11 +8,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.api import cv
+from app.api import cv, jobs
 from app.api.routes import internal, public
 from app.core.config import AppEnv, ProviderName, Settings, get_settings
 from app.core.errors import ServiceError
 from app.core.logging import configure_logging
+from app.embeddings import Embedder, HashEmbedder, LocalEmbedder
 from app.providers.factory import build_provider
 
 # Largest accepted request body (base64 CV + JSON overhead).
@@ -26,6 +27,20 @@ def _envelope(code: str, message: str, status: int, details: dict | None = None)
     if details:
         body["error"]["details"] = details
     return JSONResponse(status_code=status, content=body)
+
+
+def build_embedder(settings: Settings) -> Embedder | None:
+    match settings.embedding_provider:
+        case "local":
+            return LocalEmbedder(
+                cache_dir=settings.embedding_cache_dir,
+                offline=settings.embedding_offline,
+                threads=settings.embedding_threads,
+            )
+        case "hash":
+            return HashEmbedder()
+        case _:
+            return None
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -43,9 +58,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.dependency_overrides[get_settings] = lambda: settings
     # Built once; None means no provider is configured (endpoints answer 503).
     app.state.provider = None if settings.resolved_provider is ProviderName.NONE else build_provider(settings)
+    app.state.embedder = build_embedder(settings)
     app.include_router(public)
     app.include_router(internal)
     app.include_router(cv.router)
+    app.include_router(jobs.router)
 
     @app.middleware("http")
     async def _limit_body(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -78,6 +95,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     log.info(
         "ai service configured",
-        extra={"fields": {"env": settings.app_env.value, "llm_provider": settings.resolved_provider.value}},
+        extra={
+            "fields": {
+                "env": settings.app_env.value,
+                "llm_provider": settings.resolved_provider.value,
+                "embeddings": settings.embedding_provider,
+            }
+        },
     )
     return app

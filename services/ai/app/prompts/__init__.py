@@ -11,6 +11,7 @@ _DIR = Path(__file__).parent
 REGISTRY: dict[str, tuple[str, str]] = {
     # name -> (file, version)
     "cv_extract": ("cv_extract_v1.md", "1"),
+    "jd_analyze": ("jd_analyze_v1.md", "1"),
 }
 
 

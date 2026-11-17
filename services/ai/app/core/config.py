@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     ai_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     ai_timeout_s: float = Field(default=180.0, gt=0, le=600)
 
+    # Embeddings (ADR-020). "local" = bge-small via fastembed in-process;
+    # "hash" = deterministic test embedder (rejected in production).
+    embedding_provider: Literal["local", "hash", "none"] = "local"
+    embedding_cache_dir: str | None = None
+    # Refuse to download the model at runtime (the image bakes it in).
+    embedding_offline: bool = False
+    embedding_threads: int | None = Field(default=None, ge=1, le=32)
+
     @model_validator(mode="after")
     def _validate(self) -> Settings:
         if self.app_env is AppEnv.PRODUCTION:
@@ -54,6 +62,8 @@ class Settings(BaseSettings):
                 raise ValueError("AI_SERVICE_TOKEN is required in production (>= 32 chars)")
             if self.ai_provider is ProviderName.FAKE:
                 raise ValueError("AI_PROVIDER=fake is not allowed in production")
+            if self.embedding_provider == "hash":
+                raise ValueError("EMBEDDING_PROVIDER=hash is not allowed in production")
         if self.ai_provider is ProviderName.ANTHROPIC and not self.anthropic_api_key.get_secret_value():
             raise ValueError("AI_PROVIDER=anthropic requires ANTHROPIC_API_KEY")
         if self.ai_provider is ProviderName.OPENAI:

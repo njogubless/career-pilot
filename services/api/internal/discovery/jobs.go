@@ -73,6 +73,9 @@ type DiscoverSourceWorker struct {
 	river.WorkerDefaults[DiscoverSourceArgs]
 	Service *Service
 	Log     *slog.Logger
+	// AfterChange, if set, runs after a sync that created, updated, reposted
+	// or expired jobs (used to queue job analysis without a package cycle).
+	AfterChange func(ctx context.Context) error
 }
 
 func (w *DiscoverSourceWorker) Timeout(*river.Job[DiscoverSourceArgs]) time.Duration {
@@ -80,8 +83,13 @@ func (w *DiscoverSourceWorker) Timeout(*river.Job[DiscoverSourceArgs]) time.Dura
 }
 
 func (w *DiscoverSourceWorker) Work(ctx context.Context, job *river.Job[DiscoverSourceArgs]) error {
-	_, err := w.Service.RunSource(ctx, job.Args.SourceID, job.Args.Trigger)
+	run, err := w.Service.RunSource(ctx, job.Args.SourceID, job.Args.Trigger)
 	if err == nil {
+		if w.AfterChange != nil && run.Created+run.Updated+run.Reposted+run.Expired > 0 {
+			if herr := w.AfterChange(ctx); herr != nil {
+				w.Log.Warn("post-discovery hook failed", "err", herr)
+			}
+		}
 		return nil
 	}
 	var se *sources.SourceError

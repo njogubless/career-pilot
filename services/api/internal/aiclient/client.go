@@ -34,6 +34,20 @@ type Info struct {
 	LLMConfigured  bool     `json:"llm_configured"`  // a usable provider is configured
 	PromptVersions []string `json:"prompt_versions"` // loaded prompt template ids
 	Capabilities   []string `json:"capabilities"`    // implemented endpoints
+	// Matching inputs (Phase 4).
+	EmbeddingModel   *string           `json:"embedding_model"`
+	CatalogueVersion string            `json:"catalogue_version"`
+	AnalyzerVersions map[string]string `json:"analyzer_versions"`
+}
+
+// Has reports whether the service advertises a capability.
+func (i Info) Has(capability string) bool {
+	for _, c := range i.Capabilities {
+		if c == capability {
+			return true
+		}
+	}
+	return false
 }
 
 // Health calls the unauthenticated liveness endpoint.

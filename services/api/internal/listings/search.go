@@ -118,9 +118,9 @@ func ParseFilters(v url.Values) (Filters, error) {
 		if f.Query != "" {
 			f.Sort = "relevance"
 		}
-	case "relevance", "newest", "salary":
+	case "relevance", "newest", "salary", "match":
 	default:
-		errs["sort"] = "Use relevance, newest or salary."
+		errs["sort"] = "Use relevance, newest, salary or match."
 	}
 	if f.Sort == "relevance" && f.Query == "" {
 		f.Sort = "newest"
@@ -150,6 +150,21 @@ type Summary struct {
 	FirstSeenAt     time.Time  `json:"first_seen_at"`
 	Source          SourceRef  `json:"source"`
 	ExpiredAt       *time.Time `json:"expired_at"`
+	// Match is the viewer's stored match result, when one exists.
+	Match *MatchBrief `json:"match"`
+}
+
+// MatchBrief summarises a stored match result for list views.
+type MatchBrief struct {
+	Score       float64 `json:"score"`
+	Eligibility string  `json:"eligibility"`
+	Confidence  string  `json:"confidence"`
+}
+
+// Viewer identifies whose match results to join into list results.
+type Viewer struct {
+	UserID       uuid.UUID
+	MatchVersion string // empty: matching disabled
 }
 
 type SalaryOut struct {
@@ -171,11 +186,13 @@ type Page struct {
 	Total      int       `json:"total"`
 }
 
-const summaryCols = `j.id, j.title, j.company_name, j.department, j.location_raw, j.remote_status, j.remote_scope,
+// SummaryCols selects the columns ScanSummary reads (aliases j = jobs, s = job_sources).
+const SummaryCols = `j.id, j.title, j.company_name, j.department, j.location_raw, j.remote_status, j.remote_scope,
 	j.remote_countries, j.remote_region, j.location_countries, j.employment_type, j.salary_min::float8, j.salary_max::float8,
 	j.salary_currency, j.salary_period, j.salary_text, j.posted_at, j.first_seen_at, s.kind, s.display_name, j.expired_at`
 
-func scanSummary(r pgx.Row, extra ...any) (Summary, error) {
+// ScanSummary reads SummaryCols, then any extra destinations.
+func ScanSummary(r pgx.Row, extra ...any) (Summary, error) {
 	var x Summary
 	var smin, smax *float64
 	var cur, per *string
@@ -205,13 +222,15 @@ func (q *query) add(cond string, args ...any) {
 	q.where = append(q.where, cond)
 }
 
-const maxOffset = 2000
+// MaxOffset bounds the offset cursor.
+const MaxOffset = 2000
 
-func encodeCursor(offset int) string {
+// EncodeCursor and DecodeCursor implement the opaque offset cursor (KI-020).
+func EncodeCursor(offset int) string {
 	return base64.RawURLEncoding.EncodeToString([]byte("o:" + strconv.Itoa(offset)))
 }
 
-func decodeCursor(c string) (int, error) {
+func DecodeCursor(c string) (int, error) {
 	if c == "" {
 		return 0, nil
 	}
@@ -220,16 +239,16 @@ func decodeCursor(c string) (int, error) {
 		return 0, errors.New("bad cursor")
 	}
 	n, err := strconv.Atoi(strings.TrimPrefix(string(b), "o:"))
-	if err != nil || n < 0 || n > maxOffset {
+	if err != nil || n < 0 || n > MaxOffset {
 		return 0, errors.New("bad cursor")
 	}
 	return n, nil
 }
 
 // Search returns active, canonical postings matching f. The cursor is opaque
-// (currently an offset bounded at maxOffset; see KNOWN_ISSUES).
-func Search(ctx context.Context, q db.Querier, f Filters, limit int, cursor string) (Page, error) {
-	offset, err := decodeCursor(cursor)
+// (currently an offset bounded at MaxOffset; see KNOWN_ISSUES).
+func Search(ctx context.Context, q db.Querier, f Filters, limit int, cursor string, viewer Viewer) (Page, error) {
+	offset, err := DecodeCursor(cursor)
 	if err != nil {
 		return Page{}, httpx.Validation(map[string]string{"cursor": "Invalid cursor."})
 	}
@@ -274,27 +293,51 @@ func Search(ctx context.Context, q db.Querier, f Filters, limit int, cursor stri
 		order = rank + " DESC, COALESCE(j.posted_at, j.first_seen_at) DESC, j.id"
 	case "salary":
 		order = "COALESCE(j.salary_annual_max, j.salary_annual_min) DESC NULLS LAST, COALESCE(j.posted_at, j.first_seen_at) DESC, j.id"
+	case "match":
+		// Ineligible jobs sink below everything scored; unscored jobs come last.
+		order = "(m.eligibility = 'INELIGIBLE') NULLS LAST, m.overall_score DESC NULLS LAST, COALESCE(j.posted_at, j.first_seen_at) DESC, j.id"
+	}
+	matchJoin, matchCols := "", ", NULL::float8, NULL::text, NULL::text"
+	if viewer.MatchVersion != "" {
+		qb.args = append(qb.args, viewer.UserID, viewer.MatchVersion)
+		matchJoin = fmt.Sprintf(" LEFT JOIN job_match_results m ON m.job_id = j.id AND m.user_id = $%d AND m.algorithm_version = $%d",
+			len(qb.args)-1, len(qb.args))
+		matchCols = ", m.overall_score::float8, m.eligibility, m.confidence"
+	} else if f.Sort == "match" {
+		return Page{}, httpx.Validation(map[string]string{"sort": "Matching is not enabled."})
 	}
 
 	var total int
-	if err := q.QueryRow(ctx, `SELECT count(*) FROM jobs j JOIN job_sources s ON s.id = j.source_id WHERE `+where, qb.args...).Scan(&total); err != nil {
+	countArgs := qb.args
+	if viewer.MatchVersion != "" {
+		countArgs = qb.args[:len(qb.args)-2]
+	}
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM jobs j JOIN job_sources s ON s.id = j.source_id WHERE `+where, countArgs...).Scan(&total); err != nil {
 		return Page{}, err
 	}
 	args := append(qb.args, limit+1, offset)
-	rows, err := q.Query(ctx, fmt.Sprintf(`SELECT %s FROM jobs j JOIN job_sources s ON s.id = j.source_id WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`,
-		summaryCols, where, order, len(args)-1, len(args)), args...)
+	rows, err := q.Query(ctx, fmt.Sprintf(`SELECT %s%s FROM jobs j JOIN job_sources s ON s.id = j.source_id%s WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`,
+		SummaryCols, matchCols, matchJoin, where, order, len(args)-1, len(args)), args...)
 	if err != nil {
 		return Page{}, err
 	}
-	items, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Summary, error) { return scanSummary(r) })
+	items, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Summary, error) {
+		var score *float64
+		var elig, conf *string
+		x, err := ScanSummary(r, &score, &elig, &conf)
+		if err == nil && score != nil && elig != nil && conf != nil {
+			x.Match = &MatchBrief{Score: *score, Eligibility: *elig, Confidence: *conf}
+		}
+		return x, err
+	})
 	if err != nil {
 		return Page{}, err
 	}
 	page := Page{Data: items, Total: total}
 	if len(items) > limit {
 		page.Data = items[:limit]
-		if next := offset + limit; next <= maxOffset {
-			c := encodeCursor(next)
+		if next := offset + limit; next <= MaxOffset {
+			c := EncodeCursor(next)
 			page.NextCursor = &c
 		}
 	}
@@ -317,9 +360,9 @@ var ErrNotFound = errors.New("job not found")
 
 func Get(ctx context.Context, q db.Querier, id uuid.UUID) (Detail, error) {
 	var d Detail
-	row := q.QueryRow(ctx, `SELECT `+summaryCols+`, j.description_html, j.canonical_url, j.apply_url, j.tags, j.duplicate_of, j.repost_of, j.last_seen_at
+	row := q.QueryRow(ctx, `SELECT `+SummaryCols+`, j.description_html, j.canonical_url, j.apply_url, j.tags, j.duplicate_of, j.repost_of, j.last_seen_at
 		FROM jobs j JOIN job_sources s ON s.id = j.source_id WHERE j.id = $1`, id)
-	s, err := scanSummary(row, &d.DescriptionHTML, &d.CanonicalURL, &d.ApplyURL, &d.Tags, &d.DuplicateOf, &d.RepostOf, &d.LastSeenAt)
+	s, err := ScanSummary(row, &d.DescriptionHTML, &d.CanonicalURL, &d.ApplyURL, &d.Tags, &d.DuplicateOf, &d.RepostOf, &d.LastSeenAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return d, ErrNotFound
 	}

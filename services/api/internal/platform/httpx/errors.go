@@ -22,6 +22,7 @@ const (
 	CodeRateLimited       Code = "RATE_LIMITED"
 	CodePayloadTooLarge   Code = "PAYLOAD_TOO_LARGE"
 	CodeUnavailable       Code = "SERVICE_UNAVAILABLE"
+	CodeAIUnavailable     Code = "AI_PROVIDER_UNAVAILABLE"
 	CodeInternal          Code = "INTERNAL"
 )
 
@@ -35,6 +36,7 @@ var codeStatus = map[Code]int{
 	CodeRateLimited:       http.StatusTooManyRequests,
 	CodePayloadTooLarge:   http.StatusRequestEntityTooLarge,
 	CodeUnavailable:       http.StatusServiceUnavailable,
+	CodeAIUnavailable:     http.StatusServiceUnavailable,
 	CodeInternal:          http.StatusInternalServerError,
 }
 

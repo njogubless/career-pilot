@@ -15,6 +15,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/documents"
 	"github.com/careerpilot/careerpilot/services/api/internal/health"
 	"github.com/careerpilot/careerpilot/services/api/internal/listings"
+	"github.com/careerpilot/careerpilot/services/api/internal/matching"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/httpx"
 	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
@@ -32,6 +33,9 @@ type Deps struct {
 	Documents *documents.HTTP
 	Discovery *discovery.HTTP
 	Listings  *listings.HTTP
+	Matching  *matching.HTTP
+	// MatchScheduler recomputes matches after profile writes (nil disables).
+	MatchScheduler *matching.Scheduler
 	// StorageReady reports whether document storage is configured.
 	StorageReady bool
 }
@@ -62,6 +66,9 @@ func NewRouter(d Deps) http.Handler {
 			d.Auth.PublicRoutes(r)
 			r.Group(func(r chi.Router) {
 				r.Use(d.Auth.RequireAuth)
+				if d.MatchScheduler != nil {
+					r.Use(d.MatchScheduler.RecomputeOnWrite)
+				}
 				d.Auth.PrivateRoutes(r)
 				if d.Profiles != nil {
 					d.Profiles.Routes(r)
@@ -74,6 +81,9 @@ func NewRouter(d Deps) http.Handler {
 				}
 				if d.Listings != nil {
 					d.Listings.Routes(r)
+				}
+				if d.Matching != nil {
+					d.Matching.Routes(r)
 				}
 				if d.Discovery != nil {
 					r.Group(func(r chi.Router) {

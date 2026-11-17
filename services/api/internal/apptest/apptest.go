@@ -24,6 +24,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/documents"
 	"github.com/careerpilot/careerpilot/services/api/internal/jobs"
 	"github.com/careerpilot/careerpilot/services/api/internal/listings"
+	"github.com/careerpilot/careerpilot/services/api/internal/matching"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/crypto"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/db"
@@ -109,6 +110,7 @@ type App struct {
 	AI        *aiclient.Client
 	Log       *slog.Logger
 	Discovery *discovery.Service
+	Matching  *matching.Service
 }
 
 // Options customise the app under test.
@@ -151,10 +153,14 @@ func New(t *testing.T, opts Options) *App {
 		opts.Adapters = sources.Registry{}
 	}
 	disc := discovery.NewService(pool, opts.Adapters, log)
+	profSvc := profiles.NewService(pool)
+	matchSvc := matching.NewService(pool, ai, profSvc, log)
+	sched := &matching.Scheduler{Pool: pool, Queue: jobClient, Log: log}
 	h := server.NewRouter(server.Deps{Config: cfg, Logger: log, AI: ai, Auth: authH,
-		Profiles: profiles.NewHTTP(profiles.NewService(pool)), Documents: docH, StorageReady: !opts.NoStorage,
-		Discovery: discovery.NewHTTP(disc, jobClient, ratelimit.NewMemory()), Listings: listings.NewHTTP(pool)})
-	return &App{Handler: h, Pool: pool, Store: store, Mail: mail, Jobs: jobClient, AI: ai, Log: log, Discovery: disc}
+		Profiles: profiles.NewHTTP(profSvc), Documents: docH, StorageReady: !opts.NoStorage,
+		Discovery: discovery.NewHTTP(disc, jobClient, ratelimit.NewMemory()), Listings: listings.NewHTTP(pool, matching.AlgorithmVersion),
+		Matching: matching.NewHTTP(matchSvc, sched, ratelimit.NewMemory()), MatchScheduler: sched})
+	return &App{Handler: h, Pool: pool, Store: store, Mail: mail, Jobs: jobClient, AI: ai, Log: log, Discovery: disc, Matching: matchSvc}
 }
 
 // Exec runs SQL directly (assertions on persisted state).

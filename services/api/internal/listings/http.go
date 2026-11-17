@@ -19,9 +19,16 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/ids"
 )
 
-type HTTP struct{ pool *pgxpool.Pool }
+type HTTP struct {
+	pool         *pgxpool.Pool
+	matchVersion string
+}
 
-func NewHTTP(pool *pgxpool.Pool) *HTTP { return &HTTP{pool: pool} }
+// NewHTTP builds the listings handlers. matchVersion is the matching
+// algorithm version whose stored results are joined into lists ("" disables).
+func NewHTTP(pool *pgxpool.Pool, matchVersion string) *HTTP {
+	return &HTTP{pool: pool, matchVersion: matchVersion}
+}
 
 // Routes are mounted behind RequireAuth.
 func (h *HTTP) Routes(r chi.Router) {
@@ -48,7 +55,8 @@ func (h *HTTP) search(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	page, err := Search(r.Context(), h.pool, f, limit, r.URL.Query().Get("cursor"))
+	viewer := Viewer{UserID: auth.MustPrincipal(r.Context()).UserID, MatchVersion: h.matchVersion}
+	page, err := Search(r.Context(), h.pool, f, limit, r.URL.Query().Get("cursor"), viewer)
 	if err != nil {
 		httpx.WriteError(w, r, err)
 		return

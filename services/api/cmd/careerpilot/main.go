@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/riverqueue/river"
@@ -31,6 +32,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/health"
 	"github.com/careerpilot/careerpilot/services/api/internal/jobs"
 	"github.com/careerpilot/careerpilot/services/api/internal/listings"
+	"github.com/careerpilot/careerpilot/services/api/internal/matching"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/crypto"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/db"
@@ -234,19 +236,22 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		Secret: secret, Argon2: crypto.DefaultArgon2,
 	}, log)
 	authH := auth.NewHTTP(authSvc, cfg.CookieSecure, cfg.TrustProxyHeaders)
-	profilesH := profiles.NewHTTP(profiles.NewService(in.pool))
+	profSvc := profiles.NewService(in.pool)
+	profilesH := profiles.NewHTTP(profSvc)
 	docSvc := documents.NewService(in.pool, in.store, jobClient, in.ai, cfg.MaxUploadBytes, log)
 	docH := documents.NewHTTP(docSvc, authH, cfg.MaxUploadBytes)
 	discSvc := discovery.NewService(in.pool, sources.NewRegistry(newFetcher(cfg)), log)
 	discH := discovery.NewHTTP(discSvc, jobClient, limiter)
-	listH := listings.NewHTTP(in.pool)
+	listH := listings.NewHTTP(in.pool, matching.AlgorithmVersion)
+	matchSched := &matching.Scheduler{Pool: in.pool, Queue: jobClient, Log: log}
+	matchH := matching.NewHTTP(matching.NewService(in.pool, in.ai, profSvc, log), matchSched, limiter)
 
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: server.NewRouter(server.Deps{
 			Config: cfg, Logger: log, Checkers: in.checkers, AI: in.ai,
 			Auth: authH, Profiles: profilesH, Documents: docH, StorageReady: in.store != nil,
-			Discovery: discH, Listings: listH,
+			Discovery: discH, Listings: listH, Matching: matchH, MatchScheduler: matchSched,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       cfg.HTTPReadTimeout,
@@ -301,12 +306,29 @@ func worker(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	river.AddWorker(workers, extract)
 	discSvc := discovery.NewService(in.pool, sources.NewRegistry(newFetcher(cfg)), log)
 	river.AddWorker(workers, &discovery.DiscoverAllWorker{Pool: in.pool})
-	river.AddWorker(workers, &discovery.DiscoverSourceWorker{Service: discSvc, Log: log})
+	river.AddWorker(workers, &discovery.DiscoverSourceWorker{Service: discSvc, Log: log,
+		AfterChange: func(ctx context.Context) error {
+			client, err := river.ClientFromContextSafely[pgx.Tx](ctx)
+			if err != nil {
+				return err
+			}
+			_, err = client.Insert(ctx, matching.AnalyzeJobsArgs{Trigger: "DISCOVERY"}, nil)
+			return err
+		}})
 	if cfg.DiscoveryInterval == 0 {
 		log.Warn("scheduled discovery disabled (DISCOVERY_INTERVAL=0); manual runs still work")
 	}
+	if in.ai == nil {
+		log.Warn("matching cannot run: AI service not configured")
+	}
+	matchSvc := matching.NewService(in.pool, in.ai, profiles.NewService(in.pool), log)
+	river.AddWorker(workers, &matching.AnalyzeJobsWorker{Service: matchSvc, Log: log})
+	river.AddWorker(workers, &matching.MatchAllWorker{Service: matchSvc})
+	river.AddWorker(workers, &matching.MatchUserWorker{Service: matchSvc, Log: log})
+	river.AddWorker(workers, &matching.DeepAnalyzeWorker{Service: matchSvc})
 
-	client, err := jobs.NewWorkerClient(in.pool, workers, log, 4, discovery.PeriodicJobs(cfg.DiscoveryInterval)...)
+	periodic := append(discovery.PeriodicJobs(cfg.DiscoveryInterval), matching.PeriodicJobs()...)
+	client, err := jobs.NewWorkerClient(in.pool, workers, log, 4, periodic...)
 	if err != nil {
 		return err
 	}

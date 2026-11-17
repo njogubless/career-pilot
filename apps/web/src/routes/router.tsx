@@ -11,6 +11,8 @@ import { DocumentsPage } from "./documents/DocumentsPage";
 import { ModulePendingPage } from "./ModulePendingPage";
 import { NotFoundPage } from "./NotFoundPage";
 import { OverviewPage } from "./OverviewPage";
+import { DocumentEditorPage } from "./preparation/DocumentEditorPage";
+import { PrintPage } from "./preparation/PrintPage";
 import { ProfilePage } from "./profile/ProfilePage";
 import { SettingsPage } from "./settings/SettingsPage";
 
@@ -19,6 +21,15 @@ export const routes: RouteObject[] = [
   { path: "/register", element: <RegisterPage /> },
   { path: "/forgot-password", element: <ForgotPasswordPage /> },
   { path: "/reset-password", element: <ResetPasswordPage /> },
+  {
+    // Print layout without the app shell (browser "Save as PDF").
+    path: "/prepare/:id/print",
+    element: (
+      <RequireAuth>
+        <PrintPage />
+      </RequireAuth>
+    ),
+  },
   {
     path: "/",
     element: (
@@ -30,6 +41,7 @@ export const routes: RouteObject[] = [
       { index: true, element: <OverviewPage /> },
       { path: "discover", element: <DiscoverPage /> },
       { path: "jobs/:id", element: <JobDetailPage /> },
+      { path: "prepare/:id", element: <DocumentEditorPage /> },
       { path: "profile", element: <ProfilePage /> },
       { path: "documents", element: <DocumentsPage /> },
       { path: "settings", element: <SettingsPage /> },

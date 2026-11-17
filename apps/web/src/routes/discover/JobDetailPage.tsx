@@ -8,6 +8,7 @@ import { employmentLabel, formatSalary, relativeTime, remoteSummary, sourceLabel
 import { useJob, type JobDetail } from "../../lib/jobs";
 import { useJobMatch } from "../../lib/matching";
 import { MatchBadge } from "./MatchBadge";
+import { PreparationPanel } from "./PreparationPanel";
 import { AnalysisPanel, EligibilityPanel, FeedbackPanel, GapsPanel, SkillMatrix, SuitabilityPanel } from "./JobIntelligence";
 
 function Attribution({ job }: { job: JobDetail }) {
@@ -90,7 +91,7 @@ export function JobDetailPage() {
             </a>
           </div>
           <p className="text-body-sm text-muted">
-            Tailored documents and approved, tracked submissions arrive in Phases 5–6. Until then, applying opens the employer's official page.
+            Prepare tailored documents below. Tracked, approved submissions arrive in Phase 6; until then, applying opens the employer's official page.
           </p>
         </div>
         <Panel className="flex flex-col gap-space-sm p-space-md lg:col-span-4">
@@ -136,6 +137,7 @@ export function JobDetailPage() {
           </Panel>
         </div>
         <aside className="flex min-w-0 flex-col gap-space-lg lg:col-span-5">
+          <PreparationPanel jobId={id} />
           {match.data?.match && <GapsPanel match={match.data.match} />}
           {match.data && <AnalysisPanel jobId={id} data={match.data} />}
           {match.data && match.data.status === "READY" && <FeedbackPanel key={match.data.feedback?.updated_at ?? "none"} jobId={id} data={match.data} />}

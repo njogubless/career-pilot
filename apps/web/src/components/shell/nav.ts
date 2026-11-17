@@ -55,5 +55,9 @@ export function findNavItem(pathname: string): NavItem | undefined {
     const discover = allNavItems.find((i) => i.path === "/discover");
     return discover && { ...discover, title: "Job Dossier" };
   }
+  if (pathname.startsWith("/prepare/")) {
+    const docs = allNavItems.find((i) => i.path === "/documents");
+    return docs && { ...docs, title: "Application Preparation" };
+  }
   return allNavItems.find((i) => (i.path === "/" ? pathname === "/" : pathname.startsWith(i.path)));
 }

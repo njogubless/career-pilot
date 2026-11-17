@@ -11,6 +11,7 @@ import { documentsKey, formatBytes, useDocuments, useExtraction, type Doc, type 
 import { useMeta } from "../../lib/meta";
 import { useProfile } from "../../lib/profile";
 import { ExtractionReview } from "./ExtractionReview";
+import { TailoredDocuments } from "./TailoredDocuments";
 
 const MAX_BYTES = 10 * 1024 * 1024;
 
@@ -175,7 +176,8 @@ export function DocumentsPage() {
         </Tag>
         <h1 className="font-serif text-headline-lg-mobile text-on-surface md:text-headline-lg">Documents & CVs</h1>
         <p className="max-w-2xl text-body-lg text-on-surface-variant">
-          Upload a CV and CareerPilot proposes profile entries from it. You review every item before anything is saved.
+          Upload a CV and CareerPilot proposes profile entries from it. You review every item before anything is saved. Tailored documents for
+          specific jobs are listed below.
         </p>
         {meta.data && !aiReady && (
           <p className="max-w-2xl border-l-2 border-terracotta pl-space-sm text-body-sm text-on-surface">
@@ -218,6 +220,7 @@ export function DocumentsPage() {
           </Panel>
         </div>
       )}
+      <TailoredDocuments />
     </div>
   );
 }

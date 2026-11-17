@@ -50,3 +50,33 @@ func TestTokens(t *testing.T) {
 		t.Fatal("hash comparison wrong")
 	}
 }
+
+func TestSealerRoundTripAndBinding(t *testing.T) {
+	key := make([]byte, 32)
+	key[0] = 7
+	s, err := NewSealer(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct, err := s.Seal([]byte("refresh-token"), []byte("user-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pt, err := s.Open(ct, []byte("user-1")); err != nil || string(pt) != "refresh-token" {
+		t.Fatalf("open: %q %v", pt, err)
+	}
+	if _, err := s.Open(ct, []byte("user-2")); err == nil {
+		t.Fatal("ciphertext must be bound to its owner")
+	}
+	ct2, _ := s.Seal([]byte("refresh-token"), []byte("user-1"))
+	if string(ct) == string(ct2) {
+		t.Fatal("nonces must differ")
+	}
+	ct[len(ct)-1] ^= 1
+	if _, err := s.Open(ct, []byte("user-1")); err == nil {
+		t.Fatal("tampering must be detected")
+	}
+	if _, err := NewSealer([]byte("short")); err == nil {
+		t.Fatal("short key accepted")
+	}
+}

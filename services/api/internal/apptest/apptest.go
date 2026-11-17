@@ -24,9 +24,11 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/automation"
 	"github.com/careerpilot/careerpilot/services/api/internal/discovery"
 	"github.com/careerpilot/careerpilot/services/api/internal/documents"
+	"github.com/careerpilot/careerpilot/services/api/internal/gmail"
 	"github.com/careerpilot/careerpilot/services/api/internal/jobs"
 	"github.com/careerpilot/careerpilot/services/api/internal/listings"
 	"github.com/careerpilot/careerpilot/services/api/internal/matching"
+	"github.com/careerpilot/careerpilot/services/api/internal/outreach"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/crypto"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/db"
@@ -118,6 +120,7 @@ type App struct {
 	Preparation *preparation.Service
 	// Applications exposes the service for agent-actor tests.
 	Applications *applications.Service
+	Outreach     *outreach.Service
 }
 
 // Options customise the app under test.
@@ -125,6 +128,10 @@ type Options struct {
 	AIURL     string // empty: AI service not configured
 	NoStorage bool
 	Adapters  sources.Registry // job-source adapters (fakes in tests)
+	// GoogleURL points Google OAuth and the Gmail API at a fake server
+	// (empty: Gmail not configured).
+	GoogleURL string
+	Resolver  outreach.Resolver
 }
 
 func New(t *testing.T, opts Options) *App {
@@ -165,14 +172,29 @@ func New(t *testing.T, opts Options) *App {
 	sched := &matching.Scheduler{Pool: pool, Queue: jobClient, Log: log}
 	prep := preparation.NewService(pool, ai, profSvc, jobClient, log)
 	appsSvc := applications.NewService(pool, automation.NewGuard(pool), matching.AlgorithmVersion, log)
+	var gmailSvc *gmail.Service
+	if opts.GoogleURL != "" {
+		g := opts.GoogleURL
+		var err error
+		gmailSvc, err = gmail.New(pool, gmail.Config{ClientID: "test-client", ClientSecret: "test-secret",
+			RedirectURL: "http://app.test/api/v1/integrations/gmail/callback", AuthURL: g + "/auth", TokenURL: g + "/token",
+			RevokeURL: g + "/revoke", APIBase: g}, []byte("0123456789abcdef0123456789abcdef"), log)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	outSvc := outreach.NewServiceWithGmail(outreach.Deps{Pool: pool, AI: ai, Prep: prep, Guard: automation.NewGuard(pool),
+		Resolver: opts.Resolver, Log: log}, gmailSvc)
 	h := server.NewRouter(server.Deps{Config: cfg, Logger: log, AI: ai, Auth: authH,
 		Profiles: profiles.NewHTTP(profSvc), Documents: docH, StorageReady: !opts.NoStorage,
 		Discovery: discovery.NewHTTP(disc, jobClient, ratelimit.NewMemory()), Listings: listings.NewHTTP(pool, matching.AlgorithmVersion),
 		Matching: matching.NewHTTP(matchSvc, sched, ratelimit.NewMemory()), MatchScheduler: sched,
 		Preparation:  preparation.NewHTTP(prep, authH, ratelimit.NewMemory()),
-		Applications: applications.NewHTTP(appsSvc, authH), Automation: automation.NewHTTP(automation.NewService(pool), authH)})
+		Applications: applications.NewHTTP(appsSvc, authH), Automation: automation.NewHTTP(automation.NewService(pool), authH),
+		Gmail: gmail.NewHTTP(gmailSvc, authH, cfg.AppBaseURL), Outreach: outreach.NewHTTP(outSvc, authH, ratelimit.NewMemory()),
+		GmailReady: gmailSvc != nil})
 	return &App{Handler: h, Pool: pool, Store: store, Mail: mail, Jobs: jobClient, AI: ai, Log: log, Discovery: disc, Matching: matchSvc,
-		Preparation: prep, Applications: appsSvc}
+		Preparation: prep, Applications: appsSvc, Outreach: outSvc}
 }
 
 // Exec runs SQL directly (assertions on persisted state).

@@ -72,6 +72,21 @@ type Config struct {
 	SMTPUsername string
 	SMTPPassword string
 	SMTPFrom     string
+
+	// Gmail via Google OAuth (Phase 7). Endpoints are overridable for tests.
+	GoogleClientID     string
+	GoogleClientSecret string
+	GoogleRedirectURL  string
+	GoogleAuthURL      string
+	GoogleTokenURL     string
+	GoogleRevokeURL    string
+	GmailAPIBase       string
+}
+
+// GmailConfigured reports whether Gmail can be connected: OAuth client
+// credentials plus the key that encrypts stored tokens.
+func (c Config) GmailConfigured() bool {
+	return c.GoogleClientID != "" && c.GoogleClientSecret != "" && len(c.DataEncryptionKey) == 32
 }
 
 // StorageConfigured reports whether object storage settings are present.
@@ -127,6 +142,18 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		SMTPUsername: r.str("SMTP_USERNAME", ""),
 		SMTPPassword: r.str("SMTP_PASSWORD", ""),
 		SMTPFrom:     r.str("SMTP_FROM", ""),
+
+		GoogleClientID:     r.str("GOOGLE_OAUTH_CLIENT_ID", ""),
+		GoogleClientSecret: r.str("GOOGLE_OAUTH_CLIENT_SECRET", ""),
+		GoogleRedirectURL:  r.str("GOOGLE_OAUTH_REDIRECT_URL", ""),
+		GoogleAuthURL:      r.str("GOOGLE_OAUTH_AUTH_URL", "https://accounts.google.com/o/oauth2/v2/auth"),
+		GoogleTokenURL:     r.str("GOOGLE_OAUTH_TOKEN_URL", "https://oauth2.googleapis.com/token"),
+		GoogleRevokeURL:    r.str("GOOGLE_OAUTH_REVOKE_URL", "https://oauth2.googleapis.com/revoke"),
+		GmailAPIBase:       strings.TrimRight(r.str("GMAIL_API_BASE", "https://gmail.googleapis.com"), "/"),
+	}
+	if c.GoogleRedirectURL == "" {
+		// The web origin proxies /api to the API (nginx in Compose, Vite in dev).
+		c.GoogleRedirectURL = strings.TrimRight(r.str("APP_BASE_URL", "http://localhost:5173"), "/") + "/api/v1/integrations/gmail/callback"
 	}
 	c.CookieSecure = r.bool("COOKIE_SECURE", c.Env == EnvProduction)
 

@@ -15,9 +15,11 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/automation"
 	"github.com/careerpilot/careerpilot/services/api/internal/discovery"
 	"github.com/careerpilot/careerpilot/services/api/internal/documents"
+	"github.com/careerpilot/careerpilot/services/api/internal/gmail"
 	"github.com/careerpilot/careerpilot/services/api/internal/health"
 	"github.com/careerpilot/careerpilot/services/api/internal/listings"
 	"github.com/careerpilot/careerpilot/services/api/internal/matching"
+	"github.com/careerpilot/careerpilot/services/api/internal/outreach"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/httpx"
 	"github.com/careerpilot/careerpilot/services/api/internal/preparation"
@@ -42,6 +44,11 @@ type Deps struct {
 	// Applications and Automation (Phase 6).
 	Applications *applications.HTTP
 	Automation   *automation.HTTP
+	// Gmail and Outreach (Phase 7). Gmail handlers report "not configured" themselves.
+	Gmail    *gmail.HTTP
+	Outreach *outreach.HTTP
+	// GmailReady reports whether Gmail OAuth is configured.
+	GmailReady bool
 	// MatchScheduler recomputes matches after profile writes (nil disables).
 	MatchScheduler *matching.Scheduler
 	// StorageReady reports whether document storage is configured.
@@ -101,6 +108,12 @@ func NewRouter(d Deps) http.Handler {
 				}
 				if d.Automation != nil {
 					d.Automation.Routes(r)
+				}
+				if d.Gmail != nil {
+					d.Gmail.Routes(r)
+				}
+				if d.Outreach != nil {
+					d.Outreach.Routes(r)
 				}
 				if d.Discovery != nil {
 					r.Group(func(r chi.Router) {
@@ -164,7 +177,7 @@ func metaHandler(d Deps) http.HandlerFunc {
 				"llm":              aiStatus(r.Context(), d.AI, "llm"),
 				"document_storage": storage,
 				"job_sources":      jobSourcesStatus(d),
-				"gmail":            {Status: StatusNotImplemented, Detail: "Planned for Phase 7."},
+				"gmail":            gmailStatus(d),
 			},
 		}
 		httpx.WriteJSON(w, http.StatusOK, resp)
@@ -195,4 +208,11 @@ func jobSourcesStatus(d Deps) integration {
 		return integration{Status: StatusNotConfigured, Detail: "Job discovery is not enabled on this server."}
 	}
 	return integration{Status: StatusAvailable, Detail: "Greenhouse, Lever, Ashby and Remote OK public boards."}
+}
+
+func gmailStatus(d Deps) integration {
+	if !d.GmailReady {
+		return integration{Status: StatusNotConfigured, Detail: "Gmail needs Google OAuth credentials (GOOGLE_OAUTH_CLIENT_ID/SECRET) and DATA_ENCRYPTION_KEY."}
+	}
+	return integration{Status: StatusAvailable, Detail: "Connect your account in Settings."}
 }

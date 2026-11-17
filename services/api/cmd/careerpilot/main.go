@@ -31,10 +31,12 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/automation"
 	"github.com/careerpilot/careerpilot/services/api/internal/discovery"
 	"github.com/careerpilot/careerpilot/services/api/internal/documents"
+	"github.com/careerpilot/careerpilot/services/api/internal/gmail"
 	"github.com/careerpilot/careerpilot/services/api/internal/health"
 	"github.com/careerpilot/careerpilot/services/api/internal/jobs"
 	"github.com/careerpilot/careerpilot/services/api/internal/listings"
 	"github.com/careerpilot/careerpilot/services/api/internal/matching"
+	"github.com/careerpilot/careerpilot/services/api/internal/outreach"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/crypto"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/db"
@@ -250,7 +252,13 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	matchH := matching.NewHTTP(matching.NewService(in.pool, in.ai, profSvc, log), matchSched, limiter)
 	appsH := applications.NewHTTP(applications.NewService(in.pool, automation.NewGuard(in.pool), matching.AlgorithmVersion, log), authH)
 	autoH := automation.NewHTTP(automation.NewService(in.pool), authH)
-	prepH := preparation.NewHTTP(preparation.NewService(in.pool, in.ai, profSvc, jobClient, log), authH, limiter)
+	prepSvc := preparation.NewService(in.pool, in.ai, profSvc, jobClient, log)
+	prepH := preparation.NewHTTP(prepSvc, authH, limiter)
+	gmailSvc, err := newGmail(cfg, in, log)
+	if err != nil {
+		return err
+	}
+	outreachSvc := outreach.NewServiceWithGmail(outreach.Deps{Pool: in.pool, AI: in.ai, Prep: prepSvc, Guard: automation.NewGuard(in.pool), Log: log}, gmailSvc)
 
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,
@@ -259,6 +267,8 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			Auth: authH, Profiles: profilesH, Documents: docH, StorageReady: in.store != nil,
 			Discovery: discH, Listings: listH, Matching: matchH, MatchScheduler: matchSched, Preparation: prepH,
 			Applications: appsH, Automation: autoH,
+			Gmail: gmail.NewHTTP(gmailSvc, authH, cfg.AppBaseURL), Outreach: outreach.NewHTTP(outreachSvc, authH, limiter),
+			GmailReady: gmailSvc != nil,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       cfg.HTTPReadTimeout,
@@ -333,11 +343,20 @@ func worker(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	river.AddWorker(workers, &matching.MatchAllWorker{Service: matchSvc})
 	river.AddWorker(workers, &matching.MatchUserWorker{Service: matchSvc, Log: log})
 	river.AddWorker(workers, &matching.DeepAnalyzeWorker{Service: matchSvc})
+	gmailSvc, err := newGmail(cfg, in, log)
+	if err != nil {
+		return err
+	}
+	workerPrep := preparation.NewService(in.pool, in.ai, profiles.NewService(in.pool), nil, log)
+	outreachSvc := outreach.NewServiceWithGmail(outreach.Deps{Pool: in.pool, AI: in.ai, Prep: workerPrep, Guard: automation.NewGuard(in.pool), Log: log}, gmailSvc)
+	river.AddWorker(workers, &outreach.PollRepliesWorker{Service: outreachSvc})
+	river.AddWorker(workers, &outreach.FollowUpsWorker{Service: outreachSvc})
 	// Generation only enqueues from the API; the worker needs no insert client.
 	river.AddWorker(workers, &preparation.GenerateDocumentWorker{
 		Service: preparation.NewService(in.pool, in.ai, profiles.NewService(in.pool), nil, log)})
 
 	periodic := append(discovery.PeriodicJobs(cfg.DiscoveryInterval), matching.PeriodicJobs()...)
+	periodic = append(periodic, outreach.PeriodicJobs()...)
 	client, err := jobs.NewWorkerClient(in.pool, workers, log, 4, periodic...)
 	if err != nil {
 		return err
@@ -412,4 +431,15 @@ func healthcheck() error {
 		return fmt.Errorf("healthz status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// newGmail returns nil (not configured) unless Google OAuth credentials and
+// the token encryption key are set.
+func newGmail(cfg config.Config, in *infra, log *slog.Logger) (*gmail.Service, error) {
+	if !cfg.GmailConfigured() {
+		log.Warn("gmail not configured: outreach sending and reply detection are disabled")
+		return nil, nil
+	}
+	return gmail.New(in.pool, gmail.Config{ClientID: cfg.GoogleClientID, ClientSecret: cfg.GoogleClientSecret, RedirectURL: cfg.GoogleRedirectURL,
+		AuthURL: cfg.GoogleAuthURL, TokenURL: cfg.GoogleTokenURL, RevokeURL: cfg.GoogleRevokeURL, APIBase: cfg.GmailAPIBase}, cfg.DataEncryptionKey, log)
 }

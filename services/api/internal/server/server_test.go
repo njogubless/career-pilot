@@ -43,8 +43,14 @@ func TestMetaWithoutAIServiceIsHonest(t *testing.T) {
 	if m.Integrations["ai_service"].Status != StatusNotConfigured {
 		t.Fatalf("ai_service = %+v", m.Integrations["ai_service"])
 	}
-	if m.Integrations["gmail"].Status != StatusNotImplemented {
+	// Gmail is implemented; without OAuth credentials it is reported as not configured.
+	if m.Integrations["gmail"].Status != StatusNotConfigured {
 		t.Fatalf("gmail = %+v", m.Integrations["gmail"])
+	}
+	d := testDeps(nil)
+	d.GmailReady = true
+	if g := getMeta(t, NewRouter(d)).Integrations["gmail"]; g.Status != StatusAvailable {
+		t.Fatalf("configured gmail = %+v", g)
 	}
 }
 

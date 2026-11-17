@@ -78,3 +78,34 @@ func (c *Client) ValidateDocument(ctx context.Context, in ValidateDocumentReques
 	err := c.postJSON(ctx, "/internal/v1/documents/validate", in, &out)
 	return out, err
 }
+
+type OutreachContact struct {
+	Name    string `json:"name"`
+	Title   string `json:"title"`
+	Company string `json:"company"`
+}
+
+type OutreachDraftRequest struct {
+	Kind      string          `json:"kind"` // INTRODUCTION | FOLLOW_UP
+	Job       JobContext      `json:"job"`
+	Facts     []Fact          `json:"facts"`
+	Candidate Candidate       `json:"candidate"`
+	Contact   OutreachContact `json:"contact"`
+}
+
+type OutreachDraftResponse struct {
+	Subject    string           `json:"subject"`
+	Greeting   string           `json:"greeting"`
+	Paragraphs []string         `json:"paragraphs"`
+	SignOff    string           `json:"sign_off"`
+	Validation ValidationReport `json:"validation"`
+	Questions  []string         `json:"questions"`
+	Warnings   []string         `json:"warnings"`
+	Usage      AnalyzeUsage     `json:"usage"`
+}
+
+func (c *Client) DraftOutreach(ctx context.Context, in OutreachDraftRequest) (OutreachDraftResponse, error) {
+	var out OutreachDraftResponse
+	err := c.postJSON(ctx, "/internal/v1/outreach/draft", in, &out)
+	return out, err
+}

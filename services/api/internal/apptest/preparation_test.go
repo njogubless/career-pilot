@@ -35,7 +35,7 @@ func (f *fakeDocAI) handler() http.Handler {
 	mux.HandleFunc("GET /internal/v1/info", func(w http.ResponseWriter, r *http.Request) {
 		caps := []string{"info", "documents.validate"}
 		if f.llm {
-			caps = append(caps, "documents.generate")
+			caps = append(caps, "documents.generate", "outreach.draft")
 		}
 		writeJSON(w, map[string]any{"llm_configured": f.llm, "llm_provider": "fake", "capabilities": caps})
 	})
@@ -79,6 +79,22 @@ func (f *fakeDocAI) handler() http.Handler {
 			"questions":  []string{"What was the team size?"}, "warnings": []string{},
 			"usage": map[string]any{"provider": "fake", "model": "fake-deterministic", "prompt_version": "cv_tailor@1",
 				"input_tokens": 10, "output_tokens": 5}})
+	})
+	mux.HandleFunc("POST /internal/v1/outreach/draft", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Contact struct{ Name string }
+		}
+		body, _ := readAll(r)
+		_ = json.Unmarshal(body, &in)
+		greeting := "Hello,"
+		if in.Contact.Name != "" {
+			greeting = "Hi " + strings.Fields(in.Contact.Name)[0] + ","
+		}
+		writeJSON(w, map[string]any{"subject": "Staff Engineer: billing API experience", "greeting": greeting,
+			"paragraphs": []string{"I shipped the billing API at Acme."}, "sign_off": "Best regards,",
+			"validation": map[string]any{"validator_version": "fake-check", "status": "PASSED", "issues": []any{}, "claims_checked": 1},
+			"questions":  []string{"Why this company?"}, "warnings": []string{},
+			"usage": map[string]any{"provider": "fake", "model": "fake", "prompt_version": "outreach_email@1"}})
 	})
 	mux.HandleFunc("POST /internal/v1/documents/validate", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {

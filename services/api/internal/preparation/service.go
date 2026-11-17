@@ -794,3 +794,44 @@ func (s *Service) Export(ctx context.Context, userID, docID, versionID uuid.UUID
 			"approved": d.ApprovedVersionID != nil && *d.ApprovedVersionID == versionID}})
 	return data, mime, name, nil
 }
+
+// FactSheet exposes the user's verified-fact sheet to other modules
+// (outreach drafts use the same grounding as documents).
+func (s *Service) FactSheet(ctx context.Context, userID uuid.UUID, notes string) ([]aiclient.Fact, aiclient.Candidate, error) {
+	sh, err := s.loadSheet(ctx, userID, notes)
+	return sh.Facts, sh.Candidate, err
+}
+
+// ApprovedVersion describes an approved document version usable as an attachment.
+type ApprovedVersion struct {
+	VersionID uuid.UUID `json:"version_id"`
+	JobID     uuid.UUID `json:"job_id"`
+	Kind      string    `json:"kind"`
+	VersionNo int       `json:"version_no"`
+}
+
+// ApprovedAttachment renders a version as DOCX, only if it is currently the
+// approved version of one of the user's documents.
+func (s *Service) ApprovedAttachment(ctx context.Context, userID, versionID uuid.UUID) ([]byte, string, ApprovedVersion, error) {
+	var docID uuid.UUID
+	var av ApprovedVersion
+	err := s.pool.QueryRow(ctx, `SELECT d.id, d.job_id, d.kind FROM application_documents d WHERE d.user_id = $1 AND d.approved_version_id = $2`,
+		userID, versionID).Scan(&docID, &av.JobID, &av.Kind)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, "", av, httpx.Validation(map[string]string{"attachment_version_id": "Attach a currently approved document version."})
+	}
+	if err != nil {
+		return nil, "", av, err
+	}
+	d, err := getDoc(ctx, s.pool, userID, docID)
+	if err != nil {
+		return nil, "", av, err
+	}
+	v, _, _, err := loadVersion(ctx, s.pool, userID, docID, versionID)
+	if err != nil {
+		return nil, "", av, err
+	}
+	data, _, name, err := render(v.Content, FormatDOCX, d.Company, v.VersionNo)
+	av.VersionID, av.VersionNo = versionID, v.VersionNo
+	return data, name, av, err
+}

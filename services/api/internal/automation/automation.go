@@ -33,8 +33,9 @@ const (
 
 // Actions the guard knows about.
 const (
-	ActionPrepare = "application.prepare"
-	ActionSubmit  = "application.submit"
+	ActionPrepare   = "application.prepare"
+	ActionSubmit    = "application.submit"
+	ActionSendEmail = "outreach.send"
 )
 
 type Settings struct {
@@ -97,10 +98,10 @@ func (g *Guard) Authorize(ctx context.Context, q db.Querier, userID uuid.UUID, a
 	switch {
 	case actor != audit.ActorUser && s.Paused:
 		denied = &Denied{"PAUSED", "Automation is paused. Resume it in Settings to let CareerPilot act for you."}
-	case actor != audit.ActorUser && s.Mode == ModeDiscoveryOnly && (action == ActionPrepare || action == ActionSubmit):
+	case actor != audit.ActorUser && s.Mode == ModeDiscoveryOnly && (action == ActionPrepare || action == ActionSubmit || action == ActionSendEmail):
 		denied = &Denied{"MODE", "Automation is set to discovery only."}
-	case actor != audit.ActorUser && action == ActionSubmit && s.Mode != ModeControlled:
-		denied = &Denied{"MODE", "Submissions need your explicit action in human-approved mode."}
+	case actor != audit.ActorUser && (action == ActionSubmit || action == ActionSendEmail) && s.Mode != ModeControlled:
+		denied = &Denied{"MODE", "External actions need your explicit action in human-approved mode."}
 	}
 	if denied == nil && action == ActionSubmit {
 		var n int

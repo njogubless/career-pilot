@@ -39,6 +39,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/logging"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/mailer"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/ratelimit"
+	"github.com/careerpilot/careerpilot/services/api/internal/preparation"
 	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
 	"github.com/careerpilot/careerpilot/services/api/internal/server"
 	"github.com/careerpilot/careerpilot/services/api/internal/sources"
@@ -245,13 +246,14 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	listH := listings.NewHTTP(in.pool, matching.AlgorithmVersion)
 	matchSched := &matching.Scheduler{Pool: in.pool, Queue: jobClient, Log: log}
 	matchH := matching.NewHTTP(matching.NewService(in.pool, in.ai, profSvc, log), matchSched, limiter)
+	prepH := preparation.NewHTTP(preparation.NewService(in.pool, in.ai, profSvc, jobClient, log), authH, limiter)
 
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: server.NewRouter(server.Deps{
 			Config: cfg, Logger: log, Checkers: in.checkers, AI: in.ai,
 			Auth: authH, Profiles: profilesH, Documents: docH, StorageReady: in.store != nil,
-			Discovery: discH, Listings: listH, Matching: matchH, MatchScheduler: matchSched,
+			Discovery: discH, Listings: listH, Matching: matchH, MatchScheduler: matchSched, Preparation: prepH,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       cfg.HTTPReadTimeout,
@@ -326,6 +328,9 @@ func worker(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	river.AddWorker(workers, &matching.MatchAllWorker{Service: matchSvc})
 	river.AddWorker(workers, &matching.MatchUserWorker{Service: matchSvc, Log: log})
 	river.AddWorker(workers, &matching.DeepAnalyzeWorker{Service: matchSvc})
+	// Generation only enqueues from the API; the worker needs no insert client.
+	river.AddWorker(workers, &preparation.GenerateDocumentWorker{
+		Service: preparation.NewService(in.pool, in.ai, profiles.NewService(in.pool), nil, log)})
 
 	periodic := append(discovery.PeriodicJobs(cfg.DiscoveryInterval), matching.PeriodicJobs()...)
 	client, err := jobs.NewWorkerClient(in.pool, workers, log, 4, periodic...)

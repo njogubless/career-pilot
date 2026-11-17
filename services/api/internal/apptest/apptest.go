@@ -31,6 +31,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/ids"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/mailer"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/ratelimit"
+	"github.com/careerpilot/careerpilot/services/api/internal/preparation"
 	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
 	"github.com/careerpilot/careerpilot/services/api/internal/server"
 	"github.com/careerpilot/careerpilot/services/api/internal/sources"
@@ -111,6 +112,8 @@ type App struct {
 	Log       *slog.Logger
 	Discovery *discovery.Service
 	Matching  *matching.Service
+	// Preparation runs generation in tests (its worker has no insert client).
+	Preparation *preparation.Service
 }
 
 // Options customise the app under test.
@@ -156,11 +159,14 @@ func New(t *testing.T, opts Options) *App {
 	profSvc := profiles.NewService(pool)
 	matchSvc := matching.NewService(pool, ai, profSvc, log)
 	sched := &matching.Scheduler{Pool: pool, Queue: jobClient, Log: log}
+	prep := preparation.NewService(pool, ai, profSvc, jobClient, log)
 	h := server.NewRouter(server.Deps{Config: cfg, Logger: log, AI: ai, Auth: authH,
 		Profiles: profiles.NewHTTP(profSvc), Documents: docH, StorageReady: !opts.NoStorage,
 		Discovery: discovery.NewHTTP(disc, jobClient, ratelimit.NewMemory()), Listings: listings.NewHTTP(pool, matching.AlgorithmVersion),
-		Matching: matching.NewHTTP(matchSvc, sched, ratelimit.NewMemory()), MatchScheduler: sched})
-	return &App{Handler: h, Pool: pool, Store: store, Mail: mail, Jobs: jobClient, AI: ai, Log: log, Discovery: disc, Matching: matchSvc}
+		Matching: matching.NewHTTP(matchSvc, sched, ratelimit.NewMemory()), MatchScheduler: sched,
+		Preparation: preparation.NewHTTP(prep, authH, ratelimit.NewMemory())})
+	return &App{Handler: h, Pool: pool, Store: store, Mail: mail, Jobs: jobClient, AI: ai, Log: log, Discovery: disc, Matching: matchSvc,
+		Preparation: prep}
 }
 
 // Exec runs SQL directly (assertions on persisted state).

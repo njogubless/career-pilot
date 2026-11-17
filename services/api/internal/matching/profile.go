@@ -53,7 +53,7 @@ func buildInputs(pr profiles.Profile, slugs map[string]string, now time.Time) pr
 	b := pr.Basics
 	if b.YearsExperience != nil {
 		p.YearsExperience, p.YearsSource = b.YearsExperience, "STATED"
-	} else if y := computedYears(pr.Experiences, now); y != nil {
+	} else if y := ComputedYears(pr.Experiences, now); y != nil {
 		p.YearsExperience, p.YearsSource = y, "COMPUTED"
 	}
 	if b.LocationCountry != nil {
@@ -64,7 +64,7 @@ func buildInputs(pr profiles.Profile, slugs map[string]string, now time.Time) pr
 			continue
 		}
 		p.HasEducation = true
-		if lv := degreeLevel(e.Degree); degreeRank[lv] > degreeRank[p.HighestDegree] {
+		if lv := DegreeLevel(e.Degree); degreeRank[lv] > degreeRank[p.HighestDegree] {
 			p.HighestDegree = lv
 		}
 	}
@@ -137,9 +137,9 @@ func startOf(e profiles.Experience) time.Time {
 	return e.StartDate.Time
 }
 
-// computedYears is the length of the union of dated, non-rejected roles, in
+// ComputedYears is the length of the union of dated, non-rejected roles, in
 // whole months, rounded down to half years. Undated roles are ignored.
-func computedYears(exps []profiles.Experience, now time.Time) *float64 {
+func ComputedYears(exps []profiles.Experience, now time.Time) *float64 {
 	type span struct{ from, to time.Time }
 	var spans []span
 	for _, e := range exps {
@@ -186,8 +186,8 @@ var (
 	reBachelors = regexp.MustCompile(`(?i)\b(bachelor'?s?|b\.?sc|b\.?eng|b\.?tech|b\.?a|b\.?s|b\.?com|bba|llb|undergraduate)\b`)
 )
 
-// degreeLevel classifies a free-text degree name; "" when unclear.
-func degreeLevel(s string) string {
+// DegreeLevel classifies a free-text degree name; "" when unclear.
+func DegreeLevel(s string) string {
 	switch {
 	case reDoctorate.MatchString(s):
 		return "DOCTORATE"

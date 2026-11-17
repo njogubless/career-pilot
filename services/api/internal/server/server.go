@@ -18,6 +18,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/matching"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/httpx"
+	"github.com/careerpilot/careerpilot/services/api/internal/preparation"
 	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
 )
 
@@ -34,6 +35,8 @@ type Deps struct {
 	Discovery *discovery.HTTP
 	Listings  *listings.HTTP
 	Matching  *matching.HTTP
+	// Preparation serves tailored application documents (Phase 5).
+	Preparation *preparation.HTTP
 	// MatchScheduler recomputes matches after profile writes (nil disables).
 	MatchScheduler *matching.Scheduler
 	// StorageReady reports whether document storage is configured.
@@ -84,6 +87,9 @@ func NewRouter(d Deps) http.Handler {
 				}
 				if d.Matching != nil {
 					d.Matching.Routes(r)
+				}
+				if d.Preparation != nil {
+					d.Preparation.Routes(r)
 				}
 				if d.Discovery != nil {
 					r.Group(func(r chi.Router) {

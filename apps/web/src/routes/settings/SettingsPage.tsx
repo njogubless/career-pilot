@@ -9,6 +9,7 @@ import { Panel } from "../../components/ui/Panel";
 import { Tag } from "../../components/ui/Tag";
 import { api, apiFieldError } from "../../lib/api";
 import { AutomationPanel } from "./AutomationPanel";
+import { GmailPanel, OutreachPrefsPanel } from "./GmailPanel";
 import { sessionKey, useLogout, useSession, type User } from "../../lib/session";
 
 function AccountPanel({ user }: { user: User }) {
@@ -96,7 +97,6 @@ function SecurityPanel() {
 }
 
 const upcoming = [
-  ["Connected integrations", "Gmail connection arrives with recruiter outreach (Phase 7)."],
   ["Per-action automation permissions", "Fine-grained agent permissions arrive with the Automation Centre (Phase 8). Mode, daily limit and the pause switch are above."],
   ["Data export & account deletion", "Planned for Phase 10. Until then, contact support to export or delete your data."],
 ] as const;
@@ -116,6 +116,8 @@ export function SettingsPage() {
         <AccountPanel user={session.data} />
         <SecurityPanel />
         <AutomationPanel />
+        <GmailPanel />
+        <OutreachPrefsPanel />
       </div>
       <Panel>
         <h2 className="p-space-md font-serif text-headline-sm text-on-surface">Not available yet</h2>

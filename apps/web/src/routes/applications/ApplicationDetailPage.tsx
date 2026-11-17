@@ -20,6 +20,7 @@ import {
 } from "../../lib/applications";
 import { relativeTime } from "../../lib/format";
 import { kindLabel } from "../../lib/preparation";
+import { ApplicationOutreach } from "../outreach/ApplicationOutreach";
 import { SubmissionPanel } from "./SubmissionPanel";
 
 function PackagePanel({ app }: { app: AppDetail }) {
@@ -303,6 +304,7 @@ export function ApplicationDetailPage() {
             </Panel>
           )}
           <PackagePanel app={a} />
+          <ApplicationOutreach applicationId={a.id} jobId={a.job.id} />
           <Timeline app={a} />
         </div>
         <aside className="flex min-w-0 flex-col gap-space-lg lg:col-span-4">

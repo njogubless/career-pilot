@@ -13,6 +13,8 @@ import { DocumentsPage } from "./documents/DocumentsPage";
 import { ModulePendingPage } from "./ModulePendingPage";
 import { NotFoundPage } from "./NotFoundPage";
 import { OverviewPage } from "./OverviewPage";
+import { MessagePage } from "./outreach/MessagePage";
+import { OutreachPage } from "./outreach/OutreachPage";
 import { DocumentEditorPage } from "./preparation/DocumentEditorPage";
 import { PrintPage } from "./preparation/PrintPage";
 import { ProfilePage } from "./profile/ProfilePage";
@@ -46,6 +48,8 @@ export const routes: RouteObject[] = [
       { path: "prepare/:id", element: <DocumentEditorPage /> },
       { path: "applications", element: <ApplicationsPage /> },
       { path: "applications/:id", element: <ApplicationDetailPage /> },
+      { path: "outreach", element: <OutreachPage /> },
+      { path: "outreach/messages/:id", element: <MessagePage /> },
       { path: "profile", element: <ProfilePage /> },
       { path: "documents", element: <DocumentsPage /> },
       { path: "settings", element: <SettingsPage /> },

@@ -27,7 +27,7 @@ export const navGroups: NavGroup[] = [
         summary: "Agent activity, workflow history, tool executions, approval requests and recovery." },
       { path: "/applications", label: "Applications", icon: "view_kanban", title: "Applications", phase: 6, built: true,
         summary: "Pipeline board and table, approvals, assisted submission with evidence, and execution history." },
-      { path: "/outreach", label: "Recruiter Outreach", icon: "alternate_email", title: "Recruiter Outreach", phase: 7, built: false,
+      { path: "/outreach", label: "Recruiter Outreach", icon: "alternate_email", title: "Recruiter Outreach", phase: 7, built: true,
         summary: "Recruiter contacts, verification, approved email drafts, replies and follow-ups." },
       { path: "/analytics", label: "Career Analytics", icon: "analytics", title: "Career Analytics", phase: 9, built: false,
         summary: "Application funnel, source performance, recruiter engagement and skill gaps." },

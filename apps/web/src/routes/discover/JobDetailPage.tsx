@@ -10,6 +10,7 @@ import { useJobMatch } from "../../lib/matching";
 import { MatchBadge } from "./MatchBadge";
 import { PreparationPanel } from "./PreparationPanel";
 import { TrackApplicationButton } from "../applications/TrackApplicationButton";
+import { JobContactsPanel } from "../outreach/JobContactsPanel";
 import { AnalysisPanel, EligibilityPanel, FeedbackPanel, GapsPanel, SkillMatrix, SuitabilityPanel } from "./JobIntelligence";
 
 function Attribution({ job }: { job: JobDetail }) {
@@ -140,6 +141,7 @@ export function JobDetailPage() {
         </div>
         <aside className="flex min-w-0 flex-col gap-space-lg lg:col-span-5">
           <PreparationPanel jobId={id} />
+          <JobContactsPanel jobId={id} />
           {match.data?.match && <GapsPanel match={match.data.match} />}
           {match.data && <AnalysisPanel jobId={id} data={match.data} />}
           {match.data && match.data.status === "READY" && <FeedbackPanel key={match.data.feedback?.updated_at ?? "none"} jobId={id} data={match.data} />}

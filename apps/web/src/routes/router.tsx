@@ -1,6 +1,8 @@
 import type { RouteObject } from "react-router";
 import { AppShell } from "../components/shell/AppShell";
 import { allNavItems } from "../components/shell/nav";
+import { ApplicationDetailPage } from "./applications/ApplicationDetailPage";
+import { ApplicationsPage } from "./applications/ApplicationsPage";
 import { ForgotPasswordPage, ResetPasswordPage } from "./auth/PasswordPages";
 import { LoginPage } from "./auth/LoginPage";
 import { RegisterPage } from "./auth/RegisterPage";
@@ -42,6 +44,8 @@ export const routes: RouteObject[] = [
       { path: "discover", element: <DiscoverPage /> },
       { path: "jobs/:id", element: <JobDetailPage /> },
       { path: "prepare/:id", element: <DocumentEditorPage /> },
+      { path: "applications", element: <ApplicationsPage /> },
+      { path: "applications/:id", element: <ApplicationDetailPage /> },
       { path: "profile", element: <ProfilePage /> },
       { path: "documents", element: <DocumentsPage /> },
       { path: "settings", element: <SettingsPage /> },

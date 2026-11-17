@@ -9,6 +9,7 @@ import { useJob, type JobDetail } from "../../lib/jobs";
 import { useJobMatch } from "../../lib/matching";
 import { MatchBadge } from "./MatchBadge";
 import { PreparationPanel } from "./PreparationPanel";
+import { TrackApplicationButton } from "../applications/TrackApplicationButton";
 import { AnalysisPanel, EligibilityPanel, FeedbackPanel, GapsPanel, SkillMatrix, SuitabilityPanel } from "./JobIntelligence";
 
 function Attribution({ job }: { job: JobDetail }) {
@@ -89,9 +90,10 @@ export function JobDetailPage() {
             >
               <Icon name="open_in_new" size={16} className="text-secondary-fixed" /> Apply on the official site
             </a>
+            <TrackApplicationButton jobId={id} />
           </div>
           <p className="text-body-sm text-muted">
-            Prepare tailored documents below. Tracked, approved submissions arrive in Phase 6; until then, applying opens the employer's official page.
+            Track the application to prepare documents, approve the package and record your submission. You always submit on the employer's official site.
           </p>
         </div>
         <Panel className="flex flex-col gap-space-sm p-space-md lg:col-span-4">

@@ -3,6 +3,7 @@ import { Icon } from "../../components/ui/Icon";
 import { Tag } from "../../components/ui/Tag";
 import { employmentLabel, formatSalary, relativeTime, remoteSummary, sourceLabel } from "../../lib/format";
 import type { JobSummary } from "../../lib/jobs";
+import { MatchBadge } from "./MatchBadge";
 
 /** Job dossier card (Stitch "Discover Jobs"): company + source tags, editorial title, telemetry rows. */
 export function JobCard({ job }: { job: JobSummary }) {
@@ -40,9 +41,7 @@ export function JobCard({ job }: { job: JobSummary }) {
           </p>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1 text-right">
-          <Tag tone="outline" className="text-muted">
-            Match · Phase 4
-          </Tag>
+          <MatchBadge match={job.match ?? null} />
           <span className="font-mono text-label-sm text-muted">
             {sourceLabel[job.source.kind]} // {relativeTime(job.posted_at ?? job.first_seen_at)}
           </span>

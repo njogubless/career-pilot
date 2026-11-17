@@ -1,5 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
+import type { MatchBrief } from "./matching";
 
 export type RemoteStatus = "REMOTE" | "HYBRID" | "ONSITE" | "UNKNOWN";
 export type RemoteScope = "WORLDWIDE" | "COUNTRIES" | "REGION" | "UNKNOWN" | "NOT_REMOTE";
@@ -25,6 +26,8 @@ export type JobSummary = {
   first_seen_at: string;
   source: { kind: SourceKind; name: string; attribution_required: boolean };
   expired_at: string | null;
+  /** The viewer's stored match result, when one exists. */
+  match: MatchBrief | null;
 };
 
 export type JobDetail = JobSummary & {

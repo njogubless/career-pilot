@@ -10,6 +10,7 @@ import { api } from "../../lib/api";
 import { filterQuery, savedSearchQuery, useJobs, useSavedSearches, useSources, type SavedSearch } from "../../lib/jobs";
 import { FilterBar } from "./FilterBar";
 import { IngestionPanel } from "./IngestionPanel";
+import { MatchingPanel } from "./MatchingPanel";
 import { JobCard } from "./JobCard";
 
 function SavedSearches({ query }: { query: string }) {
@@ -98,7 +99,7 @@ export function DiscoverPage() {
         <h1 className="font-serif text-headline-lg-mobile text-on-surface md:text-display-lg">Opportunity Intelligence Directory</h1>
         <p className="max-w-3xl text-body-lg text-on-surface-variant">
           Live index of approved public job boards{kinds.length ? ` (${kinds.map((k) => ({ GREENHOUSE: "Greenhouse", LEVER: "Lever", ASHBY: "Ashby", REMOTEOK: "Remote OK" })[k]).join(", ")})` : ""}.
-          Duplicates across sources are merged and expired postings removed. Match scores against your profile arrive in Phase 4.
+          Duplicates across sources are merged and expired postings removed. Scores compare each posting with your profile; sort by best match to rank them.
         </p>
       </header>
 
@@ -146,6 +147,7 @@ export function DiscoverPage() {
           )}
         </section>
         <aside className="flex flex-col gap-space-lg xl:sticky xl:top-20 xl:col-span-4">
+          <MatchingPanel />
           <SavedSearches query={query} />
           <IngestionPanel />
         </aside>

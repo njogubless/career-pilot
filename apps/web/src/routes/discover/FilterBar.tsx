@@ -119,6 +119,7 @@ export function FilterBar({ total }: { total: number | undefined }) {
             value={params.get("sort") ?? (params.get("q") ? "relevance" : "newest")}
             onChange={(e) => set("sort", e.target.value)}
           >
+            <option value="match">Best match</option>
             <option value="newest">Newest</option>
             <option value="relevance" disabled={!params.get("q")}>
               Relevance

@@ -6,6 +6,9 @@ import { Tag } from "../../components/ui/Tag";
 import { ApiError } from "../../lib/api";
 import { employmentLabel, formatSalary, relativeTime, remoteSummary, sourceLabel } from "../../lib/format";
 import { useJob, type JobDetail } from "../../lib/jobs";
+import { useJobMatch } from "../../lib/matching";
+import { MatchBadge } from "./MatchBadge";
+import { AnalysisPanel, EligibilityPanel, FeedbackPanel, GapsPanel, SkillMatrix, SuitabilityPanel } from "./JobIntelligence";
 
 function Attribution({ job }: { job: JobDetail }) {
   // Remote OK's API terms require a followed link back and naming them as the
@@ -25,6 +28,7 @@ function Attribution({ job }: { job: JobDetail }) {
 export function JobDetailPage() {
   const { id = "" } = useParams();
   const job = useJob(id);
+  const match = useJobMatch(id);
 
   if (job.isPending) return <Loading label="Loading dossier" />;
   if (job.isError) {
@@ -44,12 +48,17 @@ export function JobDetailPage() {
 
   return (
     <div className="flex flex-col gap-space-lg">
-      <nav aria-label="Breadcrumb" className="font-mono text-label-md text-muted">
-        <Link to="/discover" className="hover:underline">
-          Discover jobs
-        </Link>{" "}
-        / {j.company} / <span className="text-on-surface">{j.title}</span>
-      </nav>
+      <div className="flex flex-wrap items-center justify-between gap-space-sm">
+        <nav aria-label="Breadcrumb" className="font-mono text-label-md text-muted">
+          <Link to="/discover" className="hover:underline">
+            Discover jobs
+          </Link>{" "}
+          / {j.company} / <span className="text-on-surface">{j.title}</span>
+        </nav>
+        {match.data?.match && (
+          <MatchBadge match={{ score: match.data.match.score, eligibility: match.data.match.eligibility, confidence: match.data.match.confidence }} />
+        )}
+      </div>
 
       {j.expired_at && (
         <div role="status" className="rounded-sm border border-terracotta bg-tertiary-fixed/40 px-space-md py-space-sm text-body-md text-on-surface">
@@ -101,26 +110,35 @@ export function JobDetailPage() {
       </header>
 
       <div className="grid grid-cols-1 items-start gap-space-lg lg:grid-cols-12">
-        <Panel className="lg:col-span-8">
-          <div className="border-b border-stone p-space-md">
-            <p className="label-caps text-outline">Source ingestion</p>
-            <h2 className="font-serif text-headline-sm text-on-surface">Job description</h2>
-          </div>
-          {j.description_html ? (
-            // Sanitised server-side (bluemonday UGC policy, no scripts/styles/handlers); CSP blocks inline scripts.
-            <div className="job-prose p-space-md" dangerouslySetInnerHTML={{ __html: j.description_html }} />
-          ) : (
-            <p className="p-space-md text-body-md text-muted">The source did not provide a description.</p>
+        <div className="flex min-w-0 flex-col gap-space-lg lg:col-span-7">
+          {match.isPending && <Loading label="Computing suitability" />}
+          {match.isError && (
+            <Panel className="p-space-md">
+              <p role="alert" className="text-body-md text-terracotta">
+                Suitability could not be loaded: {match.error.message}
+              </p>
+            </Panel>
           )}
-        </Panel>
-        <aside className="flex flex-col gap-space-lg lg:col-span-4">
-          <Panel className="p-space-md">
-            <p className="label-caps text-outline">AI suitability decomposition</p>
-            <p className="mt-space-xs text-body-md text-on-surface">Not analysed yet.</p>
-            <p className="mt-1 text-body-sm text-muted">
-              Eligibility checks, skill matrix and a versioned match score against your verified profile arrive in Phase 4.
-            </p>
+          {match.data && <SuitabilityPanel data={match.data} />}
+          {match.data?.match && <SkillMatrix match={match.data.match} />}
+          {match.data?.match && <EligibilityPanel match={match.data.match} />}
+          <Panel>
+            <div className="border-b border-stone p-space-md">
+              <p className="label-caps text-outline">Source ingestion</p>
+              <h2 className="font-serif text-headline-sm text-on-surface">Job description</h2>
+            </div>
+            {j.description_html ? (
+              // Sanitised server-side (bluemonday UGC policy, no scripts/styles/handlers); CSP blocks inline scripts.
+              <div className="job-prose p-space-md" dangerouslySetInnerHTML={{ __html: j.description_html }} />
+            ) : (
+              <p className="p-space-md text-body-md text-muted">The source did not provide a description.</p>
+            )}
           </Panel>
+        </div>
+        <aside className="flex min-w-0 flex-col gap-space-lg lg:col-span-5">
+          {match.data?.match && <GapsPanel match={match.data.match} />}
+          {match.data && <AnalysisPanel jobId={id} data={match.data} />}
+          {match.data && match.data.status === "READY" && <FeedbackPanel key={match.data.feedback?.updated_at ?? "none"} jobId={id} data={match.data} />}
           {j.tags.length > 0 && (
             <Panel className="p-space-md">
               <p className="label-caps text-outline">Source tags</p>

@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.api import cv, documents, jobs
+from app.api import cv, documents, goals, jobs
 from app.api.routes import internal, public
 from app.core.config import AppEnv, ProviderName, Settings, get_settings
 from app.core.errors import ServiceError
@@ -64,6 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(cv.router)
     app.include_router(jobs.router)
     app.include_router(documents.router)
+    app.include_router(goals.router)
 
     @app.middleware("http")
     async def _limit_body(request: Request, call_next):  # type: ignore[no-untyped-def]

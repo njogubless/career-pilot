@@ -16,6 +16,7 @@ REGISTRY: dict[str, tuple[str, str]] = {
     "cover_letter": ("cover_letter_v1.md", "1"),
     "app_answers": ("app_answers_v1.md", "1"),
     "outreach_email": ("outreach_email_v1.md", "1"),
+    "goal_interpret": ("goal_interpret_v1.md", "1"),
 }
 
 

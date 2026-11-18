@@ -835,3 +835,90 @@ func (s *Service) ApprovedAttachment(ctx context.Context, userID, versionID uuid
 	av.VersionID, av.VersionNo = versionID, v.VersionNo
 	return data, name, av, err
 }
+
+// PrepareForWorkflow is the Preparation agent's tool. It returns the user's
+// document of this kind for the job, creating one when none has content
+// (template from verified facts, or an AI draft when useAI). It is
+// idempotent: a recovered or retried task reuses the existing document.
+func (s *Service) PrepareForWorkflow(ctx context.Context, userID, jobID uuid.UUID, kind string, useAI bool) (Document, Version, error) {
+	var docID uuid.UUID
+	var current *uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT id, current_version_id FROM application_documents WHERE user_id = $1 AND job_id = $2 AND kind = $3`,
+		userID, jobID, kind).Scan(&docID, &current)
+	switch {
+	case err == nil && current != nil:
+	case errors.Is(err, pgx.ErrNoRows) || (err == nil && current == nil):
+		if !useAI {
+			d, err := s.CreateFromProfile(ctx, userID, jobID, GenerateInput{Kind: kind, Source: SourceProfile}, "")
+			if err != nil {
+				return Document{}, Version{}, err
+			}
+			docID = d.ID
+			break
+		}
+		if err := s.requireLLM(ctx); err != nil {
+			return Document{}, Version{}, err
+		}
+		in := GenerateInput{Kind: kind, Source: SourceAI}
+		qs, err := in.normalize()
+		if err != nil {
+			return Document{}, Version{}, err
+		}
+		if err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+			docID, err = upsertDoc(ctx, tx, userID, jobID, in, qs)
+			return err
+		}); err != nil {
+			return Document{}, Version{}, err
+		}
+		d, err := getDoc(ctx, s.pool, userID, docID)
+		if err != nil {
+			return Document{}, Version{}, err
+		}
+		g, gerr := s.draft(ctx, userID, d)
+		if gerr != nil {
+			return Document{}, Version{}, &httpx.Error{Code: httpx.CodeUnavailable, Message: gerr.Message, Details: map[string]string{"code": gerr.Code}, Cause: gerr.Cause}
+		}
+		usage := g.usage
+		err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+			vid, _, err := insertVersion(ctx, tx, userID, docID, newVersion{Origin: OriginGenerated, Content: g.content, Validation: &g.validation,
+				Questions: g.resp.Questions, Warnings: g.resp.Warnings, Usage: &usage, FactsHash: g.sheet.Hash})
+			if err != nil {
+				return err
+			}
+			return audit.Record(ctx, tx, audit.Event{UserID: &userID, Actor: audit.ActorAgent, Action: "application_document.generate",
+				SubjectType: "application_document", SubjectID: &docID, Outcome: audit.Success,
+				Metadata: map[string]any{"kind": kind, "version_id": vid, "validation": g.validation.Status, "via": "workflow"}})
+		})
+		if err != nil {
+			return Document{}, Version{}, err
+		}
+	default:
+		return Document{}, Version{}, err
+	}
+	v, err := s.Get(ctx, userID, docID)
+	if err != nil {
+		return Document{}, Version{}, err
+	}
+	if v.Current == nil {
+		return Document{}, Version{}, errors.New("document has no content")
+	}
+	return v.Document, *v.Current, nil
+}
+
+// ApproveCurrentForWorkflow approves the current version on the user's
+// explicit approval of a workflow package. Versions with fact-check errors
+// are never approved this way; the user must review them in the editor.
+func (s *Service) ApproveCurrentForWorkflow(ctx context.Context, userID, docID uuid.UUID) error {
+	d, err := getDoc(ctx, s.pool, userID, docID)
+	if err != nil {
+		return err
+	}
+	if d.CurrentVersionID == nil {
+		return httpx.NewError(httpx.CodeInvalidTransition, "The document has no content.")
+	}
+	if d.ApprovedVersionID != nil && *d.ApprovedVersionID == *d.CurrentVersionID {
+		return nil // already approved (idempotent)
+	}
+	_, _, err = s.Approve(ctx, userID, docID, ApproveInput{VersionID: *d.CurrentVersionID}, "")
+	return err
+}

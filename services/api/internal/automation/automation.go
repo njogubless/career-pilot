@@ -36,6 +36,8 @@ const (
 	ActionPrepare   = "application.prepare"
 	ActionSubmit    = "application.submit"
 	ActionSendEmail = "outreach.send"
+	// ActionShortlist adds jobs to the user's own pipeline (tracking only).
+	ActionShortlist = "application.shortlist"
 )
 
 type Settings struct {

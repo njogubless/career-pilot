@@ -413,3 +413,33 @@ func (s *Service) ProfileChanged(ctx context.Context, userID uuid.UUID) (bool, e
 	}
 	return last == nil || *last != prep.Hash, nil
 }
+
+// EvaluateJobs scores specific jobs for a user (the Matching agent's tool):
+// the profile is prepared once, and results are stored like any other match
+// so they are reproducible. Jobs without analysis yet are left out; the
+// returned map is keyed by job id.
+func (s *Service) EvaluateJobs(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]Result, error) {
+	prep, err := s.prepare(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !prep.Ready {
+		return nil, ErrProfileIncomplete
+	}
+	jobs, err := loadJobs(ctx, s.pool, userID, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]Result, len(jobs))
+	results := make([]Result, 0, len(jobs))
+	for _, j := range jobs {
+		r := Evaluate(prep.Profile, j, s.weights)
+		out[j.ID] = r
+		results = append(results, r)
+	}
+	if len(jobs) == 0 {
+		return out, nil
+	}
+	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error { return saveResults(ctx, tx, userID, prep.Hash, jobs, results) })
+	return out, err
+}

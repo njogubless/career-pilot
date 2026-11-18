@@ -71,41 +71,11 @@ func (w *GenerateDocumentWorker) Work(ctx context.Context, job *river.Job[Genera
 	if err != nil {
 		return w.fail(ctx, job, "DOCUMENT_UNAVAILABLE", "The document no longer exists.", err, false)
 	}
-	sh, err := s.loadSheet(ctx, a.UserID, d.Notes)
-	if err != nil {
-		return w.fail(ctx, job, "INTERNAL", errGeneric, err, true)
+	g, gerr := s.draft(ctx, a.UserID, d)
+	if gerr != nil {
+		return w.fail(ctx, job, gerr.Code, gerr.Message, gerr.Cause, gerr.Retryable)
 	}
-	if countUsable(sh) == 0 {
-		return w.fail(ctx, job, "PROFILE_INCOMPLETE",
-			"Your profile has no verified experience, skills or education to build from. Add or verify facts on your profile first.",
-			errors.New("no verified facts"), false)
-	}
-	jc, err := jobContext(ctx, s, jobID)
-	if err != nil {
-		return w.fail(ctx, job, "INTERNAL", errGeneric, err, true)
-	}
-	resp, err := s.ai.GenerateDocument(ctx, aiclient.GenerateDocumentRequest{Kind: d.Kind, Job: jc, Facts: sh.Facts,
-		Candidate: sh.Candidate, Questions: d.Questions})
-	if err != nil {
-		var aerr *aiclient.Error
-		if errors.As(err, &aerr) {
-			return w.fail(ctx, job, aerr.Code, userMessage(aerr), err, aerr.Retryable)
-		}
-		return w.fail(ctx, job, "AI_SERVICE_ERROR", "The AI service failed.", err, true)
-	}
-	var c Content
-	if err := json.Unmarshal(resp.Content, &c); err != nil {
-		return w.fail(ctx, job, "AI_OUTPUT_INVALID", "The AI service returned an unreadable document.", err, true)
-	}
-	if err := c.sanitize(d.Kind); err != nil {
-		return w.fail(ctx, job, "AI_OUTPUT_INVALID", "The AI service returned an invalid document.", err, true)
-	}
-	sh.render(&c)
-	val := resp.Validation
-	if val.Issues == nil {
-		val.Issues = []aiclient.Issue{}
-	}
-	usage := resp.Usage
+	c, val, usage, sh, resp := g.content, g.validation, g.usage, g.sheet, g.resp
 
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		vid, _, err := insertVersion(ctx, tx, a.UserID, docID, newVersion{Origin: OriginGenerated, Content: c, Validation: &val,
@@ -197,4 +167,63 @@ func userMessage(e *aiclient.Error) string {
 		return "The AI produced an incomplete draft. Please try again."
 	}
 	return errGeneric
+}
+
+// draftErr is a classified generation failure.
+type draftErr struct {
+	Code, Message string
+	Cause         error
+	Retryable     bool
+}
+
+type drafted struct {
+	content    Content
+	validation aiclient.ValidationReport
+	usage      aiclient.AnalyzeUsage
+	sheet      sheet
+	resp       aiclient.GenerateDocumentResponse
+}
+
+// draft asks the AI service for a grounded draft of document d and returns
+// sanitised, profile-rendered content. Shared by the generation worker and
+// the workflow Preparation agent.
+func (s *Service) draft(ctx context.Context, userID uuid.UUID, d Document) (drafted, *draftErr) {
+	if s.ai == nil {
+		return drafted{}, &draftErr{"SERVICE_NOT_CONFIGURED", "The AI service is not configured on this server.", errors.New("no ai client"), false}
+	}
+	sh, err := s.loadSheet(ctx, userID, d.Notes)
+	if err != nil {
+		return drafted{}, &draftErr{"INTERNAL", errGeneric, err, true}
+	}
+	if countUsable(sh) == 0 {
+		return drafted{}, &draftErr{"PROFILE_INCOMPLETE",
+			"Your profile has no verified experience, skills or education to build from. Add or verify facts on your profile first.",
+			errors.New("no verified facts"), false}
+	}
+	jc, err := jobContext(ctx, s, d.JobID)
+	if err != nil {
+		return drafted{}, &draftErr{"INTERNAL", errGeneric, err, true}
+	}
+	resp, err := s.ai.GenerateDocument(ctx, aiclient.GenerateDocumentRequest{Kind: d.Kind, Job: jc, Facts: sh.Facts,
+		Candidate: sh.Candidate, Questions: d.Questions})
+	if err != nil {
+		var aerr *aiclient.Error
+		if errors.As(err, &aerr) {
+			return drafted{}, &draftErr{aerr.Code, userMessage(aerr), err, aerr.Retryable}
+		}
+		return drafted{}, &draftErr{"AI_SERVICE_ERROR", "The AI service failed.", err, true}
+	}
+	var c Content
+	if err := json.Unmarshal(resp.Content, &c); err != nil {
+		return drafted{}, &draftErr{"AI_OUTPUT_INVALID", "The AI service returned an unreadable document.", err, true}
+	}
+	if err := c.sanitize(d.Kind); err != nil {
+		return drafted{}, &draftErr{"AI_OUTPUT_INVALID", "The AI service returned an invalid document.", err, true}
+	}
+	sh.render(&c)
+	val := resp.Validation
+	if val.Issues == nil {
+		val.Issues = []aiclient.Issue{}
+	}
+	return drafted{content: c, validation: val, usage: resp.Usage, sheet: sh, resp: resp}, nil
 }

@@ -109,3 +109,21 @@ func (c *Client) DraftOutreach(ctx context.Context, in OutreachDraftRequest) (Ou
 	err := c.postJSON(ctx, "/internal/v1/outreach/draft", in, &out)
 	return out, err
 }
+
+type GoalInterpretResponse struct {
+	Interpretation struct {
+		Template  string          `json:"template"`
+		Params    json.RawMessage `json:"params"`
+		Questions []string        `json:"questions"`
+		Summary   string          `json:"summary"`
+	} `json:"interpretation"`
+	PromptVersion string `json:"prompt_version"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+}
+
+func (c *Client) InterpretGoal(ctx context.Context, objective string) (GoalInterpretResponse, error) {
+	var out GoalInterpretResponse
+	err := c.postJSON(ctx, "/internal/v1/goals/interpret", map[string]string{"objective": objective}, &out)
+	return out, err
+}

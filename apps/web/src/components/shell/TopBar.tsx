@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router";
+import { Link, useLocation } from "react-router";
 import { ApiError } from "../../lib/api";
+import { useAutomation } from "../../lib/applications";
+import { useNotifications } from "../../lib/notifications";
 import { useTriggerDiscovery } from "../../lib/jobs";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
@@ -41,10 +43,8 @@ export function TopBar({ onOpenMenu, menuOpen }: { onOpenMenu: () => void; menuO
         </div>
 
         <div className="flex items-center gap-space-sm">
-          <span className="label-caps hidden items-center gap-1.5 rounded-sm bg-surface-container-low px-space-sm py-1 text-on-surface-variant md:inline-flex">
-            <span aria-hidden className="h-2 w-2 rounded-full bg-outline-variant" />
-            Agent loop: not enabled
-          </span>
+          <AutomationBadge />
+          <NotificationBell />
           {notice && (
             <span role="status" className="hidden max-w-xs truncate text-body-sm text-on-surface-variant lg:inline" title={notice}>
               {notice}
@@ -67,5 +67,42 @@ export function TopBar({ onOpenMenu, menuOpen }: { onOpenMenu: () => void; menuO
         </div>
       </div>
     </header>
+  );
+}
+
+const modeLabel = { DISCOVERY_ONLY: "Discovery only", HUMAN_APPROVED: "Human approved", CONTROLLED: "Controlled" } as const;
+
+/** The real automation state (mode + pause switch), linking to the Automation Centre. */
+function AutomationBadge() {
+  const a = useAutomation();
+  if (!a.data) return null;
+  const paused = a.data.paused;
+  return (
+    <Link
+      to="/automation"
+      className="label-caps hidden items-center gap-1.5 rounded-sm bg-surface-container-low px-space-sm py-1 text-on-surface-variant hover:bg-surface-container md:inline-flex"
+    >
+      <span aria-hidden className={"h-2 w-2 rounded-full " + (paused ? "bg-terracotta" : "bg-olive")} />
+      {paused ? "Automation paused" : `Automation: ${modeLabel[a.data.mode]}`}
+    </Link>
+  );
+}
+
+function NotificationBell() {
+  const n = useNotifications(1);
+  const unread = n.data?.unread_count ?? 0;
+  return (
+    <Link
+      to="/notifications"
+      aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
+      className="relative rounded-sm p-1.5 text-on-surface hover:bg-surface-container"
+    >
+      <Icon name="notifications" size={22} />
+      {unread > 0 && (
+        <span aria-hidden className="absolute -right-0.5 -top-0.5 min-w-[18px] rounded-full bg-on-surface px-1 text-center font-mono text-[11px] leading-[18px] text-surface">
+          {unread > 99 ? "99+" : unread}
+        </span>
+      )}
+    </Link>
   );
 }

@@ -6,6 +6,7 @@ import { Panel } from "../../components/ui/Panel";
 import { Tag } from "../../components/ui/Tag";
 import { apiFieldError } from "../../lib/api";
 import { useMeta } from "../../lib/meta";
+import { ScheduleThisPlan } from "./Schedules";
 import { agentTitle, defaultParams, useInterpret, useStartWorkflow, useTemplates, type Params, type TemplateName } from "../../lib/workflows";
 
 function PlanPreview({ template }: { template: TemplateName }) {
@@ -52,8 +53,9 @@ export function ObjectiveComposer() {
       },
     });
 
+  const planParams = (): Params => ({ ...p, min_monthly_salary: salary.amount ? { amount: Number(salary.amount), currency: salary.currency.toUpperCase() } : null });
   const submit = () => {
-    const params: Params = { ...p, min_monthly_salary: salary.amount ? { amount: Number(salary.amount), currency: salary.currency.toUpperCase() } : null };
+    const params = planParams();
     start.mutate({ objective, template, params, interpretation: source }, { onSuccess: (w) => navigate(`/intelligence/workflows/${w.id}`) });
   };
 
@@ -142,6 +144,7 @@ export function ObjectiveComposer() {
           <Button icon="play_arrow" iconClassName="text-secondary-fixed" className="self-start" disabled={start.isPending} onClick={submit}>
             Start workflow
           </Button>
+          <ScheduleThisPlan objective={objective} template={template} params={planParams()} />
           <p className="text-body-sm text-muted">
             Agents only search, score, track and prepare. Approving packages is yours, and you always submit on the employer's official site.
           </p>

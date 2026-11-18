@@ -245,3 +245,37 @@ export function useDecide(workflowId: string) {
     },
   });
 }
+
+export type Schedule = {
+  id: string;
+  name: string;
+  objective: string;
+  template: TemplateName;
+  params: Params;
+  cadence: "DAILY" | "WEEKLY";
+  weekday: number | null;
+  hour: number;
+  timezone: string;
+  enabled: boolean;
+  next_run_at: string;
+  last_run_at: string | null;
+  last_outcome: "STARTED" | "SKIPPED_PAUSED" | "SKIPPED_OVERLAP" | "SKIPPED_LIMIT" | "FAILED" | null;
+  last_message: string | null;
+  created_at: string;
+};
+
+export type ScheduleBody = Omit<Schedule, "id" | "next_run_at" | "last_run_at" | "last_outcome" | "last_message" | "created_at">;
+
+export function useSchedules() {
+  return useQuery({ queryKey: ["schedules"], queryFn: () => api.get<{ data: Schedule[] }>("/api/v1/workflow-schedules") });
+}
+
+export function useScheduleActions() {
+  const qc = useQueryClient();
+  const done = () => void qc.invalidateQueries({ queryKey: ["schedules"] });
+  return {
+    create: useMutation({ mutationFn: (v: ScheduleBody) => api.post<Schedule>("/api/v1/workflow-schedules", v), onSuccess: done }),
+    update: useMutation({ mutationFn: (v: { id: string; body: ScheduleBody }) => api.put<Schedule>(`/api/v1/workflow-schedules/${v.id}`, v.body), onSuccess: done }),
+    remove: useMutation({ mutationFn: (id: string) => api.del(`/api/v1/workflow-schedules/${id}`), onSuccess: done }),
+  };
+}

@@ -29,7 +29,7 @@ export const navGroups: NavGroup[] = [
         summary: "Pipeline board and table, approvals, assisted submission with evidence, and execution history." },
       { path: "/outreach", label: "Recruiter Outreach", icon: "alternate_email", title: "Recruiter Outreach", phase: 7, built: true,
         summary: "Recruiter contacts, verification, approved email drafts, replies and follow-ups." },
-      { path: "/analytics", label: "Career Analytics", icon: "analytics", title: "Career Analytics", phase: 9, built: false,
+      { path: "/analytics", label: "Career Analytics", icon: "analytics", title: "Career Analytics", phase: 9, built: true,
         summary: "Application funnel, source performance, recruiter engagement and skill gaps." },
     ],
   },
@@ -58,6 +58,10 @@ export function findNavItem(pathname: string): NavItem | undefined {
   if (pathname.startsWith("/prepare/")) {
     const docs = allNavItems.find((i) => i.path === "/documents");
     return docs && { ...docs, title: "Application Preparation" };
+  }
+  if (pathname.startsWith("/notifications")) {
+    const settings = allNavItems.find((i) => i.path === "/settings");
+    return settings && { ...settings, title: "Notifications" };
   }
   return allNavItems.find((i) => (i.path === "/" ? pathname === "/" : pathname.startsWith(i.path)));
 }

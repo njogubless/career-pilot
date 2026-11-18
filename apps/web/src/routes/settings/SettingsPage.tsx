@@ -10,6 +10,7 @@ import { Tag } from "../../components/ui/Tag";
 import { api, apiFieldError } from "../../lib/api";
 import { AutomationPanel } from "./AutomationPanel";
 import { GmailPanel, OutreachPrefsPanel } from "./GmailPanel";
+import { NotificationsPanel } from "./NotificationsPanel";
 import { sessionKey, useLogout, useSession, type User } from "../../lib/session";
 
 function AccountPanel({ user }: { user: User }) {
@@ -118,6 +119,7 @@ export function SettingsPage() {
         <AutomationPanel />
         <GmailPanel />
         <OutreachPrefsPanel />
+        <NotificationsPanel />
       </div>
       <Panel>
         <h2 className="p-space-md font-serif text-headline-sm text-on-surface">Not available yet</h2>

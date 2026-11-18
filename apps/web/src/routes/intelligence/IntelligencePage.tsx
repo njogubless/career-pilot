@@ -6,6 +6,7 @@ import { useAutomation } from "../../lib/applications";
 import { relativeTime } from "../../lib/format";
 import { statusLabel, statusTone, usePendingApprovals, useWorkflows } from "../../lib/workflows";
 import { ObjectiveComposer } from "./ObjectiveComposer";
+import { SchedulesPanel } from "./Schedules";
 
 /** AI Intelligence Centre: objectives, plans, agent runs and approval requests. */
 export function IntelligencePage() {
@@ -51,6 +52,8 @@ export function IntelligencePage() {
       )}
 
       <ObjectiveComposer />
+
+      <SchedulesPanel />
 
       <Panel>
         <div className="border-b border-stone p-space-md">

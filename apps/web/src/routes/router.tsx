@@ -1,4 +1,6 @@
 import type { RouteObject } from "react-router";
+import { AnalyticsPage } from "./analytics/AnalyticsPage";
+import { NotificationsPage } from "./notifications/NotificationsPage";
 import { AppShell } from "../components/shell/AppShell";
 import { allNavItems } from "../components/shell/nav";
 import { ApplicationDetailPage } from "./applications/ApplicationDetailPage";
@@ -59,6 +61,8 @@ export const routes: RouteObject[] = [
       { path: "profile", element: <ProfilePage /> },
       { path: "documents", element: <DocumentsPage /> },
       { path: "settings", element: <SettingsPage /> },
+      { path: "analytics", element: <AnalyticsPage /> },
+      { path: "notifications", element: <NotificationsPage /> },
       ...allNavItems
         .filter((i) => !i.built)
         .map((item) => ({ path: item.path.slice(1), element: <ModulePendingPage item={item} /> })),

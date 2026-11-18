@@ -93,11 +93,16 @@ describe("app shell (signed in)", () => {
     expect(await screen.findByText("+5 in 24h")).toBeInTheDocument();
   });
 
-  it("renders roadmap modules as not available, never simulated", async () => {
-    mockApi(signedIn);
-    renderApp("/analytics");
-    expect(await screen.findByRole("heading", { level: 1, name: "Career Analytics" })).toBeInTheDocument();
-    expect(screen.getByText("Not available yet")).toBeInTheDocument();
+  it("shows the real automation state and unread count in the top bar", async () => {
+    mockApi({
+      ...signedIn,
+      "GET /api/v1/automation/settings": [200, { mode: "HUMAN_APPROVED", paused: true, paused_at: null, daily_submission_limit: 5, updated_at: null }],
+      "GET /api/v1/notifications": [200, { data: [], unread_count: 3 }],
+    });
+    renderApp("/");
+    expect(await screen.findByRole("link", { name: "Automation paused" })).toHaveAttribute("href", "/automation");
+    expect(await screen.findByRole("link", { name: "Notifications, 3 unread" })).toHaveAttribute("href", "/notifications");
+    expect(screen.queryByText(/Agent loop/)).not.toBeInTheDocument();
   });
 
   it("signs out from the sidebar with the CSRF token", async () => {

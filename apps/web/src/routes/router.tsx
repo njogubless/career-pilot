@@ -13,6 +13,9 @@ import { DocumentsPage } from "./documents/DocumentsPage";
 import { ModulePendingPage } from "./ModulePendingPage";
 import { NotFoundPage } from "./NotFoundPage";
 import { OverviewPage } from "./OverviewPage";
+import { AutomationCentrePage } from "./automation/AutomationCentrePage";
+import { IntelligencePage } from "./intelligence/IntelligencePage";
+import { WorkflowPage } from "./intelligence/WorkflowPage";
 import { MessagePage } from "./outreach/MessagePage";
 import { OutreachPage } from "./outreach/OutreachPage";
 import { DocumentEditorPage } from "./preparation/DocumentEditorPage";
@@ -49,6 +52,9 @@ export const routes: RouteObject[] = [
       { path: "applications", element: <ApplicationsPage /> },
       { path: "applications/:id", element: <ApplicationDetailPage /> },
       { path: "outreach", element: <OutreachPage /> },
+      { path: "intelligence", element: <IntelligencePage /> },
+      { path: "intelligence/workflows/:id", element: <WorkflowPage /> },
+      { path: "automation", element: <AutomationCentrePage /> },
       { path: "outreach/messages/:id", element: <MessagePage /> },
       { path: "profile", element: <ProfilePage /> },
       { path: "documents", element: <DocumentsPage /> },

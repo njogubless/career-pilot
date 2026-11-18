@@ -95,8 +95,8 @@ describe("app shell (signed in)", () => {
 
   it("renders roadmap modules as not available, never simulated", async () => {
     mockApi(signedIn);
-    renderApp("/intelligence");
-    expect(await screen.findByRole("heading", { level: 1, name: "Intelligence Centre" })).toBeInTheDocument();
+    renderApp("/analytics");
+    expect(await screen.findByRole("heading", { level: 1, name: "Career Analytics" })).toBeInTheDocument();
     expect(screen.getByText("Not available yet")).toBeInTheDocument();
   });
 

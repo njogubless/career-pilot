@@ -97,7 +97,7 @@ function SecurityPanel() {
 }
 
 const upcoming = [
-  ["Per-action automation permissions", "Fine-grained agent permissions arrive with the Automation Centre (Phase 8). Mode, daily limit and the pause switch are above."],
+  ["Per-action autonomous permissions", "Not offered: agents never send email or submit applications, whatever the mode. Mode, limits and the pause switch are above and in the Automation Centre."],
   ["Data export & account deletion", "Planned for Phase 10. Until then, contact support to export or delete your data."],
 ] as const;
 

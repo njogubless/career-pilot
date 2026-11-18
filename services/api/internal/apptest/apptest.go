@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/careerpilot/careerpilot/services/api/internal/aiclient"
+	"github.com/careerpilot/careerpilot/services/api/internal/analytics"
 	"github.com/careerpilot/careerpilot/services/api/internal/applications"
 	"github.com/careerpilot/careerpilot/services/api/internal/auth"
 	"github.com/careerpilot/careerpilot/services/api/internal/automation"
@@ -28,6 +29,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/jobs"
 	"github.com/careerpilot/careerpilot/services/api/internal/listings"
 	"github.com/careerpilot/careerpilot/services/api/internal/matching"
+	"github.com/careerpilot/careerpilot/services/api/internal/notifications"
 	"github.com/careerpilot/careerpilot/services/api/internal/outreach"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/crypto"
@@ -120,9 +122,11 @@ type App struct {
 	// Preparation runs generation in tests (its worker has no insert client).
 	Preparation *preparation.Service
 	// Applications exposes the service for agent-actor tests.
-	Applications *applications.Service
-	Outreach     *outreach.Service
-	Workflows    *workflows.Engine
+	Applications  *applications.Service
+	Outreach      *outreach.Service
+	Workflows     *workflows.Engine
+	Notifications *notifications.Service
+	Analytics     *analytics.Service
 }
 
 // Options customise the app under test.
@@ -187,6 +191,8 @@ func New(t *testing.T, opts Options) *App {
 	}
 	engine := workflows.NewEngine(workflows.Deps{Pool: pool, Queue: jobClient, Prof: profSvc, Match: matchSvc, Apps: appsSvc,
 		Prep: prep, Guard: automation.NewGuard(pool), AI: ai, Log: log})
+	notifSvc := notifications.NewService(pool, log)
+	anSvc := analytics.NewService(pool, matching.AlgorithmVersion)
 	outSvc := outreach.NewServiceWithGmail(outreach.Deps{Pool: pool, AI: ai, Prep: prep, Guard: automation.NewGuard(pool),
 		Resolver: opts.Resolver, Log: log}, gmailSvc)
 	h := server.NewRouter(server.Deps{Config: cfg, Logger: log, AI: ai, Auth: authH,
@@ -196,9 +202,11 @@ func New(t *testing.T, opts Options) *App {
 		Preparation:  preparation.NewHTTP(prep, authH, ratelimit.NewMemory()),
 		Applications: applications.NewHTTP(appsSvc, authH), Automation: automation.NewHTTP(automation.NewService(pool), authH),
 		Gmail: gmail.NewHTTP(gmailSvc, authH, cfg.AppBaseURL), Outreach: outreach.NewHTTP(outSvc, authH, ratelimit.NewMemory()),
-		GmailReady: gmailSvc != nil, Workflows: workflows.NewHTTP(engine, authH, ratelimit.NewMemory())})
+		GmailReady: gmailSvc != nil, Workflows: workflows.NewHTTP(engine, authH, ratelimit.NewMemory()),
+		Notifications: notifications.NewHTTP(notifSvc), Analytics: analytics.NewHTTP(anSvc, ratelimit.NewMemory())})
 	return &App{Handler: h, Pool: pool, Store: store, Mail: mail, Jobs: jobClient, AI: ai, Log: log, Discovery: disc, Matching: matchSvc,
-		Preparation: prep, Applications: appsSvc, Outreach: outSvc, Workflows: engine}
+		Preparation: prep, Applications: appsSvc, Outreach: outSvc, Workflows: engine,
+		Notifications: notifSvc, Analytics: anSvc}
 }
 
 // Exec runs SQL directly (assertions on persisted state).

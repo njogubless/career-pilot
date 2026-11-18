@@ -26,6 +26,7 @@ import (
 	"github.com/riverqueue/river"
 
 	"github.com/careerpilot/careerpilot/services/api/internal/aiclient"
+	"github.com/careerpilot/careerpilot/services/api/internal/analytics"
 	"github.com/careerpilot/careerpilot/services/api/internal/applications"
 	"github.com/careerpilot/careerpilot/services/api/internal/auth"
 	"github.com/careerpilot/careerpilot/services/api/internal/automation"
@@ -36,6 +37,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/jobs"
 	"github.com/careerpilot/careerpilot/services/api/internal/listings"
 	"github.com/careerpilot/careerpilot/services/api/internal/matching"
+	"github.com/careerpilot/careerpilot/services/api/internal/notifications"
 	"github.com/careerpilot/careerpilot/services/api/internal/outreach"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/crypto"
@@ -274,6 +276,8 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			GmailReady: gmailSvc != nil,
 			Workflows: workflows.NewHTTP(workflows.NewEngine(workflows.Deps{Pool: in.pool, Queue: jobClient, Prof: profSvc, Match: matchSvc,
 				Apps: appsSvc, Prep: prepSvc, Guard: automation.NewGuard(in.pool), AI: in.ai, Log: log}), authH, limiter),
+			Notifications: notifications.NewHTTP(notifications.NewService(in.pool, log)),
+			Analytics:     analytics.NewHTTP(analytics.NewService(in.pool, matching.AlgorithmVersion), limiter),
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       cfg.HTTPReadTimeout,
@@ -359,6 +363,9 @@ func worker(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		Guard: automation.NewGuard(in.pool), AI: in.ai, Log: log})
 	river.AddWorker(workers, &workflows.TaskWorker{Engine: engine})
 	river.AddWorker(workers, &workflows.MaintainWorker{Engine: engine})
+	river.AddWorker(workers, &workflows.ScheduleWorker{Engine: engine})
+	river.AddWorker(workers, &notifications.SweepWorker{Service: notifications.NewService(in.pool, log)})
+	river.AddWorker(workers, &analytics.WeeklyWorker{Service: analytics.NewService(in.pool, matching.AlgorithmVersion), Log: log})
 	river.AddWorker(workers, &outreach.PollRepliesWorker{Service: outreachSvc})
 	river.AddWorker(workers, &outreach.FollowUpsWorker{Service: outreachSvc})
 	// Generation only enqueues from the API; the worker needs no insert client.
@@ -368,6 +375,8 @@ func worker(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	periodic := append(discovery.PeriodicJobs(cfg.DiscoveryInterval), matching.PeriodicJobs()...)
 	periodic = append(periodic, outreach.PeriodicJobs()...)
 	periodic = append(periodic, workflows.PeriodicJobs()...)
+	periodic = append(periodic, notifications.PeriodicJobs()...)
+	periodic = append(periodic, analytics.PeriodicJobs()...)
 	client, err := jobs.NewWorkerClient(in.pool, workers, log, 4, periodic...)
 	if err != nil {
 		return err

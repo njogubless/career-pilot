@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/careerpilot/careerpilot/services/api/internal/aiclient"
+	"github.com/careerpilot/careerpilot/services/api/internal/analytics"
 	"github.com/careerpilot/careerpilot/services/api/internal/applications"
 	"github.com/careerpilot/careerpilot/services/api/internal/auth"
 	"github.com/careerpilot/careerpilot/services/api/internal/automation"
@@ -19,6 +20,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/health"
 	"github.com/careerpilot/careerpilot/services/api/internal/listings"
 	"github.com/careerpilot/careerpilot/services/api/internal/matching"
+	"github.com/careerpilot/careerpilot/services/api/internal/notifications"
 	"github.com/careerpilot/careerpilot/services/api/internal/outreach"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/httpx"
@@ -50,6 +52,9 @@ type Deps struct {
 	Outreach *outreach.HTTP
 	// Workflows is the agent orchestrator (Phase 8).
 	Workflows *workflows.HTTP
+	// Notifications and Analytics (Phase 9).
+	Notifications *notifications.HTTP
+	Analytics     *analytics.HTTP
 	// GmailReady reports whether Gmail OAuth is configured.
 	GmailReady bool
 	// MatchScheduler recomputes matches after profile writes (nil disables).
@@ -120,6 +125,12 @@ func NewRouter(d Deps) http.Handler {
 				}
 				if d.Workflows != nil {
 					d.Workflows.Routes(r)
+				}
+				if d.Notifications != nil {
+					d.Notifications.Routes(r)
+				}
+				if d.Analytics != nil {
+					d.Analytics.Routes(r)
 				}
 				if d.Discovery != nil {
 					r.Group(func(r chi.Router) {

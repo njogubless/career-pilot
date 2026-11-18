@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 
@@ -207,6 +208,18 @@ type CreateInput struct {
 // Create validates a plan and starts it. The plan is a fixed template whose
 // parameters passed Params.Normalize; nothing an LLM proposed runs unchecked.
 func (e *Engine) Create(ctx context.Context, userID uuid.UUID, in CreateInput, ip string) (uuid.UUID, error) {
+	return e.create(ctx, userID, in, nil, ip)
+}
+
+// slot ties a scheduled run to its schedule and planned time.
+type slot struct {
+	ScheduleID uuid.UUID
+	At         time.Time
+}
+
+var errSlotTaken = errors.New("schedule slot already has a run")
+
+func (e *Engine) create(ctx context.Context, userID uuid.UUID, in CreateInput, sl *slot, ip string) (uuid.UUID, error) {
 	if in.Interpretation == "" {
 		in.Interpretation = "STRUCTURED"
 	}
@@ -234,8 +247,18 @@ func (e *Engine) Create(ctx context.Context, userID uuid.UUID, in CreateInput, i
 			return httpx.NewError(httpx.CodeConflict, fmt.Sprintf("You already have %d workflows in progress. Finish or cancel one first.", active))
 		}
 		params, _ := json.Marshal(prop.Params)
-		if _, err := tx.Exec(ctx, `INSERT INTO workflow_executions (id, user_id, template, objective, interpretation, params, plan_version, status, started_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,'RUNNING', now())`, wfID, userID, prop.Template.Name, in.Objective, in.Interpretation, params, PlanVersion); err != nil {
+		var schedID *uuid.UUID
+		var schedAt *time.Time
+		if sl != nil {
+			schedID, schedAt = &sl.ScheduleID, &sl.At
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO workflow_executions (id, user_id, template, objective, interpretation, params, plan_version, status,
+			started_at, schedule_id, scheduled_for) VALUES ($1,$2,$3,$4,$5,$6,$7,'RUNNING', now(), $8, $9)`,
+			wfID, userID, prop.Template.Name, in.Objective, in.Interpretation, params, PlanVersion, schedID, schedAt); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				return errSlotTaken
+			}
 			return err
 		}
 		byType := map[string]uuid.UUID{}
@@ -259,9 +282,13 @@ func (e *Engine) Create(ctx context.Context, userID uuid.UUID, in CreateInput, i
 				return err
 			}
 		}
-		if err := audit.Record(ctx, tx, audit.Event{UserID: &userID, Action: "workflow.create", SubjectType: "workflow", SubjectID: &wfID,
+		actor := audit.ActorUser
+		if sl != nil {
+			actor = audit.ActorSystem // started by the user's schedule
+		}
+		if err := audit.Record(ctx, tx, audit.Event{UserID: &userID, Actor: actor, Action: "workflow.create", SubjectType: "workflow", SubjectID: &wfID,
 			Outcome: audit.Success, IP: ip, Metadata: map[string]any{"template": prop.Template.Name, "interpretation": in.Interpretation,
-				"plan_version": PlanVersion}}); err != nil {
+				"plan_version": PlanVersion, "scheduled": sl != nil}}); err != nil {
 			return err
 		}
 		return e.advance(ctx, tx, wfID)
@@ -961,6 +988,10 @@ func (w *MaintainWorker) Work(ctx context.Context, _ *river.Job[MaintainArgs]) e
 }
 
 func PeriodicJobs() []*river.PeriodicJob {
-	return []*river.PeriodicJob{river.NewPeriodicJob(river.PeriodicInterval(time.Minute),
-		func() (river.JobArgs, *river.InsertOpts) { return MaintainArgs{}, nil }, &river.PeriodicJobOpts{RunOnStart: true})}
+	return []*river.PeriodicJob{
+		river.NewPeriodicJob(river.PeriodicInterval(time.Minute),
+			func() (river.JobArgs, *river.InsertOpts) { return MaintainArgs{}, nil }, &river.PeriodicJobOpts{RunOnStart: true}),
+		river.NewPeriodicJob(river.PeriodicInterval(time.Minute),
+			func() (river.JobArgs, *river.InsertOpts) { return ScheduleArgs{}, nil }, &river.PeriodicJobOpts{RunOnStart: true}),
+	}
 }

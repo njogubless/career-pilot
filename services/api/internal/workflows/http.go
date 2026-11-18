@@ -39,6 +39,7 @@ func (h *HTTP) Routes(r chi.Router) {
 	r.Post("/workflows/{id}/retry", h.control((*Engine).Retry))
 	r.Get("/approvals", h.approvals)
 	r.Post("/approvals/{id}/decision", h.decide)
+	h.scheduleRoutes(r)
 }
 
 func uid(r *http.Request) uuid.UUID { return auth.MustPrincipal(r.Context()).UserID }

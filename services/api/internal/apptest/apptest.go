@@ -39,6 +39,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
 	"github.com/careerpilot/careerpilot/services/api/internal/server"
 	"github.com/careerpilot/careerpilot/services/api/internal/sources"
+	"github.com/careerpilot/careerpilot/services/api/internal/workflows"
 )
 
 // NewDB creates an isolated, migrated database and drops it after the test.
@@ -121,6 +122,7 @@ type App struct {
 	// Applications exposes the service for agent-actor tests.
 	Applications *applications.Service
 	Outreach     *outreach.Service
+	Workflows    *workflows.Engine
 }
 
 // Options customise the app under test.
@@ -183,6 +185,8 @@ func New(t *testing.T, opts Options) *App {
 			t.Fatal(err)
 		}
 	}
+	engine := workflows.NewEngine(workflows.Deps{Pool: pool, Queue: jobClient, Prof: profSvc, Match: matchSvc, Apps: appsSvc,
+		Prep: prep, Guard: automation.NewGuard(pool), AI: ai, Log: log})
 	outSvc := outreach.NewServiceWithGmail(outreach.Deps{Pool: pool, AI: ai, Prep: prep, Guard: automation.NewGuard(pool),
 		Resolver: opts.Resolver, Log: log}, gmailSvc)
 	h := server.NewRouter(server.Deps{Config: cfg, Logger: log, AI: ai, Auth: authH,
@@ -192,9 +196,9 @@ func New(t *testing.T, opts Options) *App {
 		Preparation:  preparation.NewHTTP(prep, authH, ratelimit.NewMemory()),
 		Applications: applications.NewHTTP(appsSvc, authH), Automation: automation.NewHTTP(automation.NewService(pool), authH),
 		Gmail: gmail.NewHTTP(gmailSvc, authH, cfg.AppBaseURL), Outreach: outreach.NewHTTP(outSvc, authH, ratelimit.NewMemory()),
-		GmailReady: gmailSvc != nil})
+		GmailReady: gmailSvc != nil, Workflows: workflows.NewHTTP(engine, authH, ratelimit.NewMemory())})
 	return &App{Handler: h, Pool: pool, Store: store, Mail: mail, Jobs: jobClient, AI: ai, Log: log, Discovery: disc, Matching: matchSvc,
-		Preparation: prep, Applications: appsSvc, Outreach: outSvc}
+		Preparation: prep, Applications: appsSvc, Outreach: outSvc, Workflows: engine}
 }
 
 // Exec runs SQL directly (assertions on persisted state).

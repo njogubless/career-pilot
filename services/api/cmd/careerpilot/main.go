@@ -47,6 +47,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
 	"github.com/careerpilot/careerpilot/services/api/internal/server"
 	"github.com/careerpilot/careerpilot/services/api/internal/sources"
+	"github.com/careerpilot/careerpilot/services/api/internal/workflows"
 )
 
 func main() {
@@ -249,8 +250,10 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	discH := discovery.NewHTTP(discSvc, jobClient, limiter)
 	listH := listings.NewHTTP(in.pool, matching.AlgorithmVersion)
 	matchSched := &matching.Scheduler{Pool: in.pool, Queue: jobClient, Log: log}
-	matchH := matching.NewHTTP(matching.NewService(in.pool, in.ai, profSvc, log), matchSched, limiter)
-	appsH := applications.NewHTTP(applications.NewService(in.pool, automation.NewGuard(in.pool), matching.AlgorithmVersion, log), authH)
+	matchSvc := matching.NewService(in.pool, in.ai, profSvc, log)
+	matchH := matching.NewHTTP(matchSvc, matchSched, limiter)
+	appsSvc := applications.NewService(in.pool, automation.NewGuard(in.pool), matching.AlgorithmVersion, log)
+	appsH := applications.NewHTTP(appsSvc, authH)
 	autoH := automation.NewHTTP(automation.NewService(in.pool), authH)
 	prepSvc := preparation.NewService(in.pool, in.ai, profSvc, jobClient, log)
 	prepH := preparation.NewHTTP(prepSvc, authH, limiter)
@@ -269,6 +272,8 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			Applications: appsH, Automation: autoH,
 			Gmail: gmail.NewHTTP(gmailSvc, authH, cfg.AppBaseURL), Outreach: outreach.NewHTTP(outreachSvc, authH, limiter),
 			GmailReady: gmailSvc != nil,
+			Workflows: workflows.NewHTTP(workflows.NewEngine(workflows.Deps{Pool: in.pool, Queue: jobClient, Prof: profSvc, Match: matchSvc,
+				Apps: appsSvc, Prep: prepSvc, Guard: automation.NewGuard(in.pool), AI: in.ai, Log: log}), authH, limiter),
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       cfg.HTTPReadTimeout,
@@ -349,6 +354,11 @@ func worker(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	}
 	workerPrep := preparation.NewService(in.pool, in.ai, profiles.NewService(in.pool), nil, log)
 	outreachSvc := outreach.NewServiceWithGmail(outreach.Deps{Pool: in.pool, AI: in.ai, Prep: workerPrep, Guard: automation.NewGuard(in.pool), Log: log}, gmailSvc)
+	engine := workflows.NewEngine(workflows.Deps{Pool: in.pool, Prof: profiles.NewService(in.pool), Match: matchSvc,
+		Apps: applications.NewService(in.pool, automation.NewGuard(in.pool), matching.AlgorithmVersion, log), Prep: workerPrep,
+		Guard: automation.NewGuard(in.pool), AI: in.ai, Log: log})
+	river.AddWorker(workers, &workflows.TaskWorker{Engine: engine})
+	river.AddWorker(workers, &workflows.MaintainWorker{Engine: engine})
 	river.AddWorker(workers, &outreach.PollRepliesWorker{Service: outreachSvc})
 	river.AddWorker(workers, &outreach.FollowUpsWorker{Service: outreachSvc})
 	// Generation only enqueues from the API; the worker needs no insert client.
@@ -357,6 +367,7 @@ func worker(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 
 	periodic := append(discovery.PeriodicJobs(cfg.DiscoveryInterval), matching.PeriodicJobs()...)
 	periodic = append(periodic, outreach.PeriodicJobs()...)
+	periodic = append(periodic, workflows.PeriodicJobs()...)
 	client, err := jobs.NewWorkerClient(in.pool, workers, log, 4, periodic...)
 	if err != nil {
 		return err

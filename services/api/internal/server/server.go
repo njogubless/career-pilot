@@ -24,6 +24,7 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/httpx"
 	"github.com/careerpilot/careerpilot/services/api/internal/preparation"
 	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
+	"github.com/careerpilot/careerpilot/services/api/internal/workflows"
 )
 
 // Deps are the collaborators the router needs. Nil optional deps are reported
@@ -47,6 +48,8 @@ type Deps struct {
 	// Gmail and Outreach (Phase 7). Gmail handlers report "not configured" themselves.
 	Gmail    *gmail.HTTP
 	Outreach *outreach.HTTP
+	// Workflows is the agent orchestrator (Phase 8).
+	Workflows *workflows.HTTP
 	// GmailReady reports whether Gmail OAuth is configured.
 	GmailReady bool
 	// MatchScheduler recomputes matches after profile writes (nil disables).
@@ -114,6 +117,9 @@ func NewRouter(d Deps) http.Handler {
 				}
 				if d.Outreach != nil {
 					d.Outreach.Routes(r)
+				}
+				if d.Workflows != nil {
+					d.Workflows.Routes(r)
 				}
 				if d.Discovery != nil {
 					r.Group(func(r chi.Router) {

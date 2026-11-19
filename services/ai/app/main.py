@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -13,6 +15,7 @@ from app.api.routes import internal, public
 from app.core.config import AppEnv, ProviderName, Settings, get_settings
 from app.core.errors import ServiceError
 from app.core.logging import configure_logging
+from app.core.observability import Metrics, instrument, setup_tracing, shutdown_tracing, telemetry_config
 from app.embeddings import Embedder, HashEmbedder, LocalEmbedder
 from app.providers.factory import build_provider
 
@@ -43,9 +46,17 @@ def build_embedder(settings: Settings) -> Embedder | None:
             return None
 
 
+@asynccontextmanager
+async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+    yield
+    # Flush pending spans on graceful shutdown (uvicorn handles SIGTERM).
+    shutdown_tracing()
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
+    setup_tracing(settings.app_version, settings.app_env.value)
 
     app = FastAPI(
         title="CareerPilot AI Service",
@@ -54,6 +65,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         docs_url=None if settings.app_env is AppEnv.PRODUCTION else "/docs",
         redoc_url=None,
         openapi_url=None if settings.app_env is AppEnv.PRODUCTION else "/openapi.json",
+        lifespan=_lifespan,
+        telemetry=telemetry_config(),
     )
     app.dependency_overrides[get_settings] = lambda: settings
     # Built once; None means no provider is configured (endpoints answer 503).
@@ -66,12 +79,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(documents.router)
     app.include_router(goals.router)
 
+    # Metrics are served on the internal service port (never published through
+    # the web proxy); they hold counts and latencies only.
+    metrics = Metrics(settings.app_version) if settings.metrics_enabled else None
+    app.state.metrics = metrics
+    if metrics is not None:
+        app.add_api_route("/metrics", metrics.render, methods=["GET"], include_in_schema=False)
+
     @app.middleware("http")
     async def _limit_body(request: Request, call_next):  # type: ignore[no-untyped-def]
         length = request.headers.get("content-length")
         if length is not None and (not length.isdigit() or int(length) > MAX_BODY_BYTES):
             return _envelope("PAYLOAD_TOO_LARGE", "The request body is too large.", 413)
         return await call_next(request)
+
+    instrument(app, metrics)
 
     @app.exception_handler(ServiceError)
     async def _service_exc(_: Request, exc: ServiceError) -> JSONResponse:

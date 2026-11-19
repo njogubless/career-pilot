@@ -7,9 +7,11 @@ mocks for production integrations).
 
 from __future__ import annotations
 
+import os
 from enum import StrEnum
 from functools import lru_cache
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -27,6 +29,11 @@ class ProviderName(StrEnum):
     OPENAI = "openai"
     FAKE = "fake"  # deterministic, tests/offline dev only
     NONE = "none"
+
+
+# Secrets that may be supplied as files (Docker and Kubernetes secrets):
+# NAME_FILE=/run/secrets/name.
+_FILE_SECRETS = ("ai_service_token", "anthropic_api_key", "openai_api_key")
 
 
 class Settings(BaseSettings):
@@ -54,6 +61,27 @@ class Settings(BaseSettings):
     # Refuse to download the model at runtime (the image bakes it in).
     embedding_offline: bool = False
     embedding_threads: int | None = Field(default=None, ge=1, le=32)
+
+    # Prometheus /metrics on the internal service port.
+    metrics_enabled: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _secret_files(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        for name in _FILE_SECRETS:
+            path = os.environ.get(f"{name.upper()}_FILE", "").strip()
+            if not path:
+                continue
+            if data.get(name) or os.environ.get(name.upper()):
+                raise ValueError(f"{name.upper()} and {name.upper()}_FILE: set only one")
+            try:
+                data[name] = Path(path).read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                # The path is not secret; the message never includes contents.
+                raise ValueError(f"{name.upper()}_FILE: cannot read {path}") from exc
+        return data
 
     @model_validator(mode="after")
     def _validate(self) -> Settings:

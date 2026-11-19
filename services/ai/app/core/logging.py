@@ -7,6 +7,8 @@ import logging
 import sys
 from datetime import UTC, datetime
 
+from app.core.observability import current_trace_id
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -17,6 +19,9 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "service": "ai",
         }
+        trace_id = current_trace_id()
+        if trace_id:
+            payload["trace_id"] = trace_id
         extra = getattr(record, "fields", None)
         if isinstance(extra, dict):
             payload.update(extra)

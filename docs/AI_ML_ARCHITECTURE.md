@@ -1,6 +1,6 @@
 # AI / ML Architecture
 
-Status: design accepted; implementation Phases 2 (CV parsing), 4 (matching inputs), 5 (generation), 8 (goal interpretation).
+Status: Phase 2 (CV parsing) and Phase 4 (matching inputs: taxonomy, job analysis, embeddings) implemented. Generation (5) and goal interpretation (8) are planned.
 
 ## 1. Service layout (`services/ai`)
 ```text
@@ -27,27 +27,36 @@ app/
 ## 3. Matching (ADR-010)
 | Stage | Where | Method |
 |---|---|---|
-| JD requirement extraction | AI | structured output: required/preferred skills, years, seniority, location constraints, eligible countries, sponsorship, salary (only if stated) |
-| Skill normalisation | AI + catalogue | alias table first (deterministic), LLM fallback for unknown terms → reviewed into catalogue |
+| JD requirement extraction | AI | **two tiers (ADR-019)**: deterministic catalogue + section heuristics for every job; LLM structured output on demand, grounded (quotes must occur in the posting) and normalised through the catalogue |
+| Skill normalisation | AI + catalogue | versioned alias catalogue (`taxonomy/skills.json`, `tax-N`); terms outside it stay un-normalised (exact-name matching only) |
 | Hard eligibility | Go | remote requirement, country eligibility, sponsorship, mandatory qualification, salary floor (only when salary known) → `ELIGIBLE`/`INELIGIBLE`/`UNKNOWN` per rule |
 | Weighted score | Go | skills 35, experience/seniority 20, project/domain 15, location 15, compensation/preferences 15 (configurable, versioned) |
 | Semantic similarity | AI embeddings + pgvector | profile summary vs JD embedding → contributes to project/domain dimension and candidate retrieval |
-| Explanation | AI | generated **from the computed breakdown** only; cannot alter scores |
+| Explanation | Go (v1) | deterministic sentences from the computed breakdown, citing evidence; an optional LLM narrative is not yet implemented (KI-025) |
 
 Unknown inputs reduce **confidence**, not the score, and are listed explicitly.
 
-## 4. Embeddings
-Anthropic does not provide an embeddings endpoint, so `EmbeddingProvider` is pluggable. Options, decided in Phase 4:
-1. Local `fastembed` (ONNX, `bge-small-en-v1.5`, 384-d): no per-call cost and no data leaves the host, at the cost of a ~130 MB model download.
-2. OpenAI `text-embedding-3-small`.
-3. Voyage AI.
+## 4. Embeddings (decided: ADR-020)
+- **Model.** Local `BAAI/bge-small-en-v1.5` (384-d) through fastembed/ONNX in the AI service. The model is baked into the image, runs offline, and ONNX telemetry is disabled.
+- **Model id.** Includes the input recipe (`…@r2`), so a recipe change re-embeds rather than mixing vectors. Vectors are stored in pgvector with an HNSW cosine index.
+- **Inputs.** Jobs: title, company and role-relevant lines (boilerplate skipped). Profiles: headline, target roles, summary, experience, projects and skills.
+- **Tests and offline development.** A deterministic hashing embedder (`EMBEDDING_PROVIDER=hash`), which production rejects.
 
-Vector dimension is fixed per model. Changing models means re-embedding, tracked by `model_versions`.
+## 5. Document generation and factuality (implemented: ADR-021)
+- **Input.** The platform's fact sheet: only `VERIFIED` facts, plus the user's notes for the document, each with a stable ref. The job posting (≤ 12,000 chars) and application questions are delimited untrusted input.
+- **Prompts.** `cv_tailor@1`, `cover_letter@1` and `app_answers@1`. Structured output cites facts by short aliases, which map back to refs; unknown aliases are dropped and counted as a warning.
+- **Output.** `doc-v1` blocks. Claims carry refs. Structural blocks (entries, contact, skills) carry refs only, and the platform renders their text from the profile.
+- **Validator `fact-check-2`.** Deterministic (`app/documents/validate.py`) and also used for user edits. It checks unknown refs, numbers absent from the cited facts, uncatalogued-profile skills, years beyond the verified total, unsupported degrees and certifications, placeholders, and empty or unanswered blocks. It warns on uncited claims. Version 2 (Phase 7) no longer lets digits in skill names whitelist other figures: "OAuth 2.0" is allowed, but the "2" in "2M users" is checked.
+- **On failure.** Generated claims with error-level issues are removed (answers become `NEEDS_INPUT`), and the removal is reported in `warnings`.
+- **Missing information.** Returned as `questions` for the user. Motivation, salary, notice period, visa and legal questions are never answered by the model.
+- **Fake provider.** Has deterministic handlers for all three tasks (tests and offline development only).
 
-## 5. Document generation and factuality
-- Input: only `VERIFIED` profile facts + job requirements. Unverified or inferred facts are excluded.
-- Output: a structured document (sections → bullets), each bullet with `source_fact_ids`.
-- The validator rejects bullets without sources and flags numeric claims not present in the source facts. Missing information becomes questions for the user, never invented answers.
+- **Outreach emails** use the same contract with prompt `outreach_email@1` (`app/documents/outreach.py`): short, cited paragraphs. Unsupported claims are removed, and a greeting name is used only if the user recorded it.
+
+## 5a. Goal interpretation (Phase 8)
+- **Prompt `goal_interpret@1`.** It maps an objective to one of two templates plus parameters, or returns questions. The objective is delimited; instructions inside it to send email, submit, or change settings are ignored and raised as questions.
+- **Validation.** The platform re-validates everything (`Params.Normalize`, strict fields). Null means "use the default".
+- **Evaluation.** The labelled set `app/evals/goals.jsonl` (12 objectives, including injection-style ones) runs through `python -m app.evals.goal_eval`, which reports per-field accuracy. The deterministic fake parser scores 59/60 checks; it chose "prepare" for an objective that also asked for auto-submission. **Real-model accuracy is unmeasured (no API key).**
 
 ## 6. ML roadmap
 No custom model training until there are enough labelled outcomes: roughly several hundred applications with outcomes across several users. Then, with time-split validation:

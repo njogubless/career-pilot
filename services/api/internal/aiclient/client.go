@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/careerpilot/careerpilot/services/api/internal/platform/observability"
 )
 
 type Client struct {
@@ -22,7 +24,8 @@ func New(baseURL, token string, timeout time.Duration) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,
-		http:    &http.Client{Timeout: timeout},
+		// Instrumented transport: propagates W3C trace context to the AI service.
+		http: &http.Client{Timeout: timeout, Transport: observability.Transport(nil)},
 	}
 }
 

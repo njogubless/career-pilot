@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -24,6 +25,9 @@ func Connect(ctx context.Context, url string, maxConns int32) (*pgxpool.Pool, er
 	cfg.MaxConns = maxConns
 	cfg.MaxConnIdleTime = 5 * time.Minute
 	cfg.HealthCheckPeriod = 30 * time.Second
+	// Query spans (statement text only; arguments are never recorded). A
+	// no-op unless tracing is enabled.
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

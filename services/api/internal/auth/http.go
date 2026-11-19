@@ -103,6 +103,9 @@ func (h *HTTP) setCookie(w http.ResponseWriter, token string, expires time.Time)
 	})
 }
 
+// ClearSessionCookie removes the session cookie (after account deletion).
+func (h *HTTP) ClearSessionCookie(w http.ResponseWriter) { h.clearCookie(w) }
+
 func (h *HTTP) clearCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: h.cookieSecure, SameSite: http.SameSiteLaxMode})
 }

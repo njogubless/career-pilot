@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/httpx"
@@ -27,6 +28,14 @@ type Handler struct {
 	checkers []Checker
 	timeout  time.Duration
 	version  string
+	draining *atomic.Bool
+}
+
+// WithDrain makes readiness fail while flag is set, so load balancers stop
+// routing new requests before the server shuts down (graceful drain).
+func (h *Handler) WithDrain(flag *atomic.Bool) *Handler {
+	h.draining = flag
+	return h
 }
 
 func NewHandler(version string, timeout time.Duration, checkers ...Checker) *Handler {
@@ -53,6 +62,10 @@ func (h *Handler) Live(w http.ResponseWriter, _ *http.Request) {
 
 // Ready runs all checks concurrently with a shared timeout.
 func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
+	if h.draining != nil && h.draining.Load() {
+		httpx.WriteJSON(w, http.StatusServiceUnavailable, readiness{Status: "draining", Version: h.version, Checks: map[string]checkResult{}})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), h.timeout)
 	defer cancel()
 

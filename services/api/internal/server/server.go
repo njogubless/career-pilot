@@ -5,6 +5,8 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -24,7 +26,11 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/outreach"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/config"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/httpx"
+	"github.com/careerpilot/careerpilot/services/api/internal/platform/logging"
+	"github.com/careerpilot/careerpilot/services/api/internal/platform/observability"
+	"github.com/careerpilot/careerpilot/services/api/internal/platform/ratelimit"
 	"github.com/careerpilot/careerpilot/services/api/internal/preparation"
+	"github.com/careerpilot/careerpilot/services/api/internal/privacy"
 	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
 	"github.com/careerpilot/careerpilot/services/api/internal/workflows"
 )
@@ -61,10 +67,21 @@ type Deps struct {
 	MatchScheduler *matching.Scheduler
 	// StorageReady reports whether document storage is configured.
 	StorageReady bool
+	// Metrics records request metrics (nil disables). Limiter enforces the
+	// global per-user/per-IP limit (nil disables). Draining fails readiness
+	// during graceful shutdown.
+	// Privacy serves data export and account deletion (Phase 10).
+	Privacy  *privacy.HTTP
+	Metrics  *observability.Metrics
+	Limiter  ratelimit.Limiter
+	Draining *atomic.Bool
 }
 
 func NewRouter(d Deps) http.Handler {
 	r := chi.NewRouter()
+	if d.Metrics != nil {
+		r.Use(d.Metrics.HTTP)
+	}
 	r.Use(
 		httpx.RequestID(d.Logger),
 		httpx.Recover,
@@ -72,13 +89,16 @@ func NewRouter(d Deps) http.Handler {
 		httpx.SecurityHeaders(d.Config.IsProduction()),
 	)
 
-	h := health.NewHandler(d.Config.Version, 3*time.Second, d.Checkers...)
+	h := health.NewHandler(d.Config.Version, 3*time.Second, d.Checkers...).WithDrain(d.Draining)
 	r.Get("/healthz", h.Live)
 	r.Get("/readyz", h.Ready)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		if d.Auth != nil {
 			r.Use(d.Auth.LoadSession)
+			if d.Limiter != nil && d.Config.RateLimitPerMinute > 0 {
+				r.Use(globalLimit(d.Limiter, d.Auth, d.Config.RateLimitPerMinute))
+			}
 		}
 		r.Group(func(r chi.Router) {
 			r.Use(httpx.MaxBody(d.Config.MaxBodyBytes))
@@ -126,6 +146,9 @@ func NewRouter(d Deps) http.Handler {
 				if d.Workflows != nil {
 					d.Workflows.Routes(r)
 				}
+				if d.Privacy != nil {
+					d.Privacy.Routes(r)
+				}
 				if d.Notifications != nil {
 					d.Notifications.Routes(r)
 				}
@@ -155,7 +178,7 @@ func NewRouter(d Deps) http.Handler {
 	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, httpx.NewError(httpx.CodeNotFound, "Resource not found."))
 	})
-	return r
+	return observability.HTTPHandler(r)
 }
 
 // IntegrationStatus values are deliberately explicit so the UI never implies
@@ -186,12 +209,13 @@ func metaHandler(d Deps) http.HandlerFunc {
 		if !d.StorageReady {
 			storage = integration{Status: StatusNotConfigured, Detail: "Document uploads are disabled until S3 storage is configured."}
 		}
+		service, llm := aiStatus(r.Context(), d.AI)
 		resp := metaResponse{
 			Version:     d.Config.Version,
 			Environment: string(d.Config.Env),
 			Integrations: map[string]integration{
-				"ai_service":       aiStatus(r.Context(), d.AI, "service"),
-				"llm":              aiStatus(r.Context(), d.AI, "llm"),
+				"ai_service":       service,
+				"llm":              llm,
 				"document_storage": storage,
 				"job_sources":      jobSourcesStatus(d),
 				"gmail":            gmailStatus(d),
@@ -201,23 +225,23 @@ func metaHandler(d Deps) http.HandlerFunc {
 	}
 }
 
-func aiStatus(ctx context.Context, c *aiclient.Client, which string) integration {
+// aiStatus reports the AI service and its LLM provider from one /info call.
+func aiStatus(ctx context.Context, c *aiclient.Client) (service, llm integration) {
 	if c == nil {
-		return integration{Status: StatusNotConfigured, Detail: "AI_SERVICE_URL is not set."}
+		ni := integration{Status: StatusNotConfigured, Detail: "AI_SERVICE_URL is not set."}
+		return ni, ni
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	info, err := c.Info(ctx)
 	if err != nil {
-		return integration{Status: StatusUnavailable, Detail: "AI service is unreachable."}
-	}
-	if which == "service" {
-		return integration{Status: StatusAvailable}
+		down := integration{Status: StatusUnavailable, Detail: "AI service is unreachable."}
+		return down, down
 	}
 	if !info.LLMConfigured {
-		return integration{Status: StatusNotConfigured, Detail: "No LLM provider credentials configured."}
+		return integration{Status: StatusAvailable}, integration{Status: StatusNotConfigured, Detail: "No LLM provider credentials configured."}
 	}
-	return integration{Status: StatusAvailable, Detail: info.LLMProvider}
+	return integration{Status: StatusAvailable}, integration{Status: StatusAvailable, Detail: info.LLMProvider}
 }
 
 func jobSourcesStatus(d Deps) integration {
@@ -232,4 +256,28 @@ func gmailStatus(d Deps) integration {
 		return integration{Status: StatusNotConfigured, Detail: "Gmail needs Google OAuth credentials (GOOGLE_OAUTH_CLIENT_ID/SECRET) and DATA_ENCRYPTION_KEY."}
 	}
 	return integration{Status: StatusAvailable, Detail: "Connect your account in Settings."}
+}
+
+// globalLimit bounds requests per signed-in user, or per client IP when
+// signed out, across the whole API (per-action limits still apply). It fails
+// open when the limiter backend errors, so a Redis outage degrades rate
+// limiting rather than the product; the error is logged.
+func globalLimit(l ratelimit.Limiter, a *auth.HTTP, perMinute int) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			key := "global:ip:" + a.ClientIP(r)
+			if p, ok := auth.PrincipalFrom(r.Context()); ok {
+				key = "global:user:" + p.UserID.String()
+			}
+			ok, retry, err := l.Allow(r.Context(), key, perMinute, time.Minute)
+			if err != nil {
+				logging.FromContext(r.Context()).Warn("global rate limit unavailable", "err", err)
+			} else if !ok {
+				w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+				httpx.WriteError(w, r, httpx.NewError(httpx.CodeRateLimited, "Too many requests. Please slow down and try again shortly."))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }

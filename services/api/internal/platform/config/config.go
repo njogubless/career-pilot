@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/careerpilot/careerpilot/services/api/internal/platform/crypto"
 )
 
 type Env string
@@ -32,7 +34,21 @@ type Config struct {
 	HTTPReadTimeout     time.Duration
 	HTTPWriteTimeout    time.Duration
 	HTTPShutdownTimeout time.Duration
-	MaxBodyBytes        int64
+	// HTTPShutdownDrain is how long readiness reports "draining" before the
+	// server stops accepting connections, so load balancers move traffic first.
+	HTTPShutdownDrain time.Duration
+	MaxBodyBytes      int64
+	// RateLimitPerMinute bounds requests per signed-in user (or per client IP
+	// when signed out) across the whole API; 0 disables the global limit.
+	RateLimitPerMinute int
+	// MetricsAddr is the internal listener for /metrics ("" disables).
+	MetricsAddr string
+	// MigrateOnStart applies migrations when serve/worker start (single node).
+	// Multi-replica deployments run `careerpilot migrate up` as a release step
+	// and set this to false.
+	MigrateOnStart bool
+	// WorkerShutdownTimeout bounds how long the worker waits for running jobs.
+	WorkerShutdownTimeout time.Duration
 
 	DatabaseURL     string
 	DatabaseMaxConn int32
@@ -44,6 +60,11 @@ type Config struct {
 
 	SessionSecret     string
 	DataEncryptionKey []byte // 32 bytes, decoded from base64
+	// DataEncryptionKeyVersion labels the current key (1-255); values sealed
+	// with it carry this version byte. RetiredEncryptionKeys stay readable
+	// during rotation (DATA_ENCRYPTION_KEYS_RETIRED="1:<base64>,2:<base64>").
+	DataEncryptionKeyVersion byte
+	RetiredEncryptionKeys    map[byte][]byte
 
 	S3Endpoint  string
 	S3Region    string
@@ -51,6 +72,9 @@ type Config struct {
 	S3AccessKey string
 	S3SecretKey string
 	S3UseSSL    bool
+	// S3CreateBucket creates the bucket at startup when missing (bundled
+	// storage). Managed buckets are provisioned by infrastructure.
+	S3CreateBucket bool
 
 	// AppBaseURL is the public origin of the web app, used in emailed links.
 	AppBaseURL string
@@ -99,17 +123,22 @@ func (c Config) IsProduction() bool { return c.Env == EnvProduction }
 // Load reads configuration using the provided lookup function (os.LookupEnv in
 // production code; a map in tests).
 func Load(lookup func(string) (string, bool)) (Config, error) {
-	r := reader{lookup: lookup}
+	r := reader{lookup: lookup, readFile: os.ReadFile}
 	c := Config{
 		Env:      Env(r.str("APP_ENV", string(EnvDevelopment))),
 		Version:  r.str("APP_VERSION", "dev"),
 		LogLevel: r.str("LOG_LEVEL", "info"),
 
-		HTTPAddr:            r.str("API_HTTP_ADDR", ":8080"),
-		HTTPReadTimeout:     r.duration("API_HTTP_READ_TIMEOUT", 15*time.Second),
-		HTTPWriteTimeout:    r.duration("API_HTTP_WRITE_TIMEOUT", 30*time.Second),
-		HTTPShutdownTimeout: r.duration("API_HTTP_SHUTDOWN_TIMEOUT", 20*time.Second),
-		MaxBodyBytes:        r.int64("API_MAX_BODY_BYTES", 1<<20),
+		HTTPAddr:              r.str("API_HTTP_ADDR", ":8080"),
+		HTTPReadTimeout:       r.duration("API_HTTP_READ_TIMEOUT", 15*time.Second),
+		HTTPWriteTimeout:      r.duration("API_HTTP_WRITE_TIMEOUT", 30*time.Second),
+		HTTPShutdownTimeout:   r.duration("API_HTTP_SHUTDOWN_TIMEOUT", 20*time.Second),
+		HTTPShutdownDrain:     r.duration("API_HTTP_SHUTDOWN_DRAIN", 0),
+		MaxBodyBytes:          r.int64("API_MAX_BODY_BYTES", 1<<20),
+		RateLimitPerMinute:    int(r.int64("API_RATE_LIMIT_PER_MINUTE", 300)),
+		MetricsAddr:           r.str("METRICS_ADDR", ""),
+		WorkerShutdownTimeout: r.duration("WORKER_SHUTDOWN_TIMEOUT", 30*time.Second),
+		MigrateOnStart:        r.bool("MIGRATE_ON_START", true),
 
 		DatabaseURL:     r.str("DATABASE_URL", ""),
 		DatabaseMaxConn: int32(r.int64("DATABASE_MAX_CONNS", 10)),
@@ -156,6 +185,7 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		c.GoogleRedirectURL = strings.TrimRight(r.str("APP_BASE_URL", "http://localhost:5173"), "/") + "/api/v1/integrations/gmail/callback"
 	}
 	c.CookieSecure = r.bool("COOKIE_SECURE", c.Env == EnvProduction)
+	c.S3CreateBucket = r.bool("S3_CREATE_BUCKET", c.Env != EnvProduction)
 
 	if raw := r.str("DATA_ENCRYPTION_KEY", ""); raw != "" {
 		key, err := base64.StdEncoding.DecodeString(raw)
@@ -163,6 +193,32 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 			r.errs = append(r.errs, errors.New("DATA_ENCRYPTION_KEY: must be base64"))
 		} else {
 			c.DataEncryptionKey = key
+		}
+	}
+	if v := r.int64("DATA_ENCRYPTION_KEY_VERSION", 1); v < 1 || v > 255 {
+		r.errs = append(r.errs, errors.New("DATA_ENCRYPTION_KEY_VERSION: must be 1-255"))
+	} else {
+		c.DataEncryptionKeyVersion = byte(v)
+	}
+	c.RetiredEncryptionKeys = map[byte][]byte{}
+	if raw := r.str("DATA_ENCRYPTION_KEYS_RETIRED", ""); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			ver, b64, ok := strings.Cut(strings.TrimSpace(part), ":")
+			n, err := strconv.Atoi(ver)
+			key, kerr := base64.StdEncoding.DecodeString(b64)
+			switch {
+			case !ok || err != nil || n < 1 || n > 255:
+				r.errs = append(r.errs, errors.New("DATA_ENCRYPTION_KEYS_RETIRED: entries must be <version 1-255>:<base64 key>"))
+			case kerr != nil || len(key) != 32:
+				r.errs = append(r.errs, fmt.Errorf("DATA_ENCRYPTION_KEYS_RETIRED: key version %d must be 32 bytes of base64", n))
+			case byte(n) == c.DataEncryptionKeyVersion:
+				r.errs = append(r.errs, fmt.Errorf("DATA_ENCRYPTION_KEYS_RETIRED: version %d is the current key version", n))
+			default:
+				if _, dup := c.RetiredEncryptionKeys[byte(n)]; dup {
+					r.errs = append(r.errs, fmt.Errorf("DATA_ENCRYPTION_KEYS_RETIRED: version %d listed twice", n))
+				}
+				c.RetiredEncryptionKeys[byte(n)] = key
+			}
 		}
 	}
 
@@ -176,6 +232,25 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 // FromEnv loads configuration from the process environment.
 func FromEnv() (Config, error) { return Load(os.LookupEnv) }
 
+// LoadDatabaseOnly reads just what schema migrations need (least privilege:
+// the release-step migrator gets the database URL and nothing else).
+func LoadDatabaseOnly(lookup func(string) (string, bool)) (Config, error) {
+	r := reader{lookup: lookup, readFile: os.ReadFile}
+	c := Config{
+		Env:         Env(r.str("APP_ENV", string(EnvDevelopment))),
+		Version:     r.str("APP_VERSION", "dev"),
+		LogLevel:    r.str("LOG_LEVEL", "info"),
+		DatabaseURL: r.str("DATABASE_URL", ""),
+	}
+	if c.DatabaseURL == "" {
+		r.errs = append(r.errs, errors.New("DATABASE_URL: required"))
+	}
+	if len(r.errs) > 0 {
+		return Config{}, fmt.Errorf("invalid configuration: %w", errors.Join(r.errs...))
+	}
+	return c, nil
+}
+
 func (c Config) validate() []error {
 	var errs []error
 	switch c.Env {
@@ -187,6 +262,12 @@ func (c Config) validate() []error {
 		errs = append(errs, errors.New("DATABASE_URL: required"))
 	} else if _, err := url.Parse(c.DatabaseURL); err != nil {
 		errs = append(errs, errors.New("DATABASE_URL: not a valid URL"))
+	}
+	if c.RateLimitPerMinute < 0 {
+		errs = append(errs, errors.New("API_RATE_LIMIT_PER_MINUTE: must be >= 0"))
+	}
+	if c.HTTPShutdownDrain < 0 || c.HTTPShutdownDrain > time.Minute {
+		errs = append(errs, errors.New("API_HTTP_SHUTDOWN_DRAIN: must be between 0 and 1m"))
 	}
 	if c.DatabaseMaxConn < 1 {
 		errs = append(errs, errors.New("DATABASE_MAX_CONNS: must be >= 1"))
@@ -246,13 +327,35 @@ func (c Config) validate() []error {
 }
 
 type reader struct {
-	lookup func(string) (string, bool)
-	errs   []error
+	lookup   func(string) (string, bool)
+	readFile func(string) ([]byte, error)
+	errs     []error
 }
 
+// str reads key, or the file named by key_FILE (Docker and Kubernetes
+// secrets). Setting both is an error, so a stale variable cannot silently
+// override a mounted secret.
 func (r *reader) str(key, def string) string {
-	if v, ok := r.lookup(key); ok && strings.TrimSpace(v) != "" {
-		return strings.TrimSpace(v)
+	v, ok := r.lookup(key)
+	v = strings.TrimSpace(v)
+	if path, fok := r.lookup(key + "_FILE"); fok && strings.TrimSpace(path) != "" {
+		if ok && v != "" {
+			r.errs = append(r.errs, fmt.Errorf("%s and %s_FILE: set only one", key, key))
+			return def
+		}
+		b, err := r.readFile(strings.TrimSpace(path))
+		if err != nil {
+			// The path is not secret; the error never includes file contents.
+			r.errs = append(r.errs, fmt.Errorf("%s_FILE: cannot read %s", key, strings.TrimSpace(path)))
+			return def
+		}
+		if s := strings.TrimSpace(string(b)); s != "" {
+			return s
+		}
+		return def
+	}
+	if ok && v != "" {
+		return v
 	}
 	return def
 }
@@ -294,4 +397,17 @@ func (r *reader) duration(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+// Keyring returns the sealer for secrets at rest (current key plus retired
+// keys), or nil when no encryption key is configured.
+func (c Config) Keyring() (*crypto.Sealer, error) {
+	if len(c.DataEncryptionKey) != 32 {
+		return nil, nil
+	}
+	keys := map[byte][]byte{c.DataEncryptionKeyVersion: c.DataEncryptionKey}
+	for v, k := range c.RetiredEncryptionKeys {
+		keys[v] = k
+	}
+	return crypto.NewKeyring(c.DataEncryptionKeyVersion, keys)
 }

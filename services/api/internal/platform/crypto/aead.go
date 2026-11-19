@@ -27,6 +27,39 @@ func NewSealer(key []byte) (*Sealer, error) {
 	return s, nil
 }
 
+// NewKeyring seals with the current key version and opens any listed version
+// (retired keys stay readable until every value is re-sealed; see
+// `careerpilot keys rotate`).
+func NewKeyring(current byte, keys map[byte][]byte) (*Sealer, error) {
+	if current == 0 {
+		return nil, errors.New("key version must be 1-255")
+	}
+	if _, ok := keys[current]; !ok {
+		return nil, fmt.Errorf("current key version %d is not in the keyring", current)
+	}
+	s := &Sealer{aeads: map[byte]cipher.AEAD{}, current: current}
+	for v, k := range keys {
+		if v == 0 {
+			return nil, errors.New("key version must be 1-255")
+		}
+		if err := s.AddKey(v, k); err != nil {
+			return nil, fmt.Errorf("key version %d: %w", v, err)
+		}
+	}
+	return s, nil
+}
+
+// Current is the key version new values are sealed with.
+func (s *Sealer) Current() byte { return s.current }
+
+// Version reports which key version sealed a value (0 if malformed).
+func Version(sealed []byte) byte {
+	if len(sealed) == 0 {
+		return 0
+	}
+	return sealed[0]
+}
+
 func (s *Sealer) AddKey(version byte, key []byte) error {
 	if len(key) != 32 {
 		return errors.New("encryption key must be 32 bytes")

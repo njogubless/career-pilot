@@ -13,6 +13,8 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
+	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivercontrib/otelriver"
 )
 
 type Client = river.Client[pgx.Tx]
@@ -35,7 +37,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
 
 // NewInsertClient returns a client that can only enqueue jobs (used by the API).
 func NewInsertClient(pool *pgxpool.Pool, log *slog.Logger) (*Client, error) {
-	c, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Logger: log})
+	c, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Logger: log, Middleware: middleware()})
 	if err != nil {
 		return nil, fmt.Errorf("river insert client: %w", err)
 	}
@@ -49,9 +51,17 @@ func NewWorkerClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logge
 		Workers:      workers,
 		Queues:       map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: maxWorkers}},
 		PeriodicJobs: periodic,
+		Middleware:   middleware(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("river worker client: %w", err)
 	}
 	return c, nil
+}
+
+// middleware carries the enqueuing request's trace context in job metadata,
+// so a job's work span links back to the request that created it. A no-op
+// unless tracing is enabled (ADR-026).
+func middleware() []rivertype.Middleware {
+	return []rivertype.Middleware{otelriver.NewMiddleware(&otelriver.MiddlewareConfig{EnableTracePropagation: true, EnableWorkSpanJobKindSuffix: true})}
 }

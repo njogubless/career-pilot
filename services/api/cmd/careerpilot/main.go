@@ -4,6 +4,8 @@
 //	careerpilot worker           run durable background jobs (River)
 //	careerpilot migrate up       apply pending migrations
 //	careerpilot migrate status   print current/latest migration version
+//	careerpilot keys status      count stored secrets by encryption key version
+//	careerpilot keys rotate      re-seal stored secrets with the current key
 //	careerpilot healthcheck      probe the local API (container healthcheck)
 package main
 
@@ -17,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -44,8 +47,10 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/db"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/logging"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/mailer"
+	"github.com/careerpilot/careerpilot/services/api/internal/platform/observability"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/ratelimit"
 	"github.com/careerpilot/careerpilot/services/api/internal/preparation"
+	"github.com/careerpilot/careerpilot/services/api/internal/privacy"
 	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
 	"github.com/careerpilot/careerpilot/services/api/internal/server"
 	"github.com/careerpilot/careerpilot/services/api/internal/sources"
@@ -61,13 +66,17 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: careerpilot <serve|worker|migrate up|migrate status|sources seed|users promote <email>|healthcheck>")
+		return errors.New("usage: careerpilot <serve|worker|migrate up|migrate status|sources seed|users promote <email>|keys status|keys rotate|healthcheck>")
 	}
 	if args[0] == "healthcheck" {
 		// Container probe for distroless images (no shell/curl). Needs no config.
 		return healthcheck()
 	}
-	cfg, err := config.FromEnv()
+	load := config.FromEnv
+	if args[0] == "migrate" {
+		load = func() (config.Config, error) { return config.LoadDatabaseOnly(os.LookupEnv) }
+	}
+	cfg, err := load()
 	if err != nil {
 		return err
 	}
@@ -88,6 +97,8 @@ func run(args []string) error {
 		return sourcesCmd(ctx, cfg, args[1:])
 	case "users":
 		return usersCmd(ctx, cfg, args[1:])
+	case "keys":
+		return keysCmd(ctx, cfg, args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -170,10 +181,10 @@ func buildInfra(ctx context.Context, cfg config.Config, log *slog.Logger, aiTime
 			in.close()
 			return nil, err
 		}
-		if !cfg.IsProduction() {
+		if cfg.S3CreateBucket {
 			ectx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			if err := s3.EnsureBucket(ectx, cfg.S3Region); err != nil {
-				log.Warn("could not ensure dev bucket", "err", err)
+				log.Warn("could not ensure bucket", "err", err)
 			}
 			cancel()
 		}
@@ -193,13 +204,42 @@ func buildInfra(ctx context.Context, cfg config.Config, log *slog.Logger, aiTime
 	return in, nil
 }
 
+// startObservability installs tracing and the internal metrics listener.
+// The returned function flushes pending spans.
+func startObservability(ctx context.Context, cfg config.Config, log *slog.Logger, service string, pool *pgxpool.Pool) (*observability.Metrics, func(), error) {
+	shutdown, err := observability.SetupTracing(ctx, "careerpilot-"+service, cfg.Version, string(cfg.Env))
+	if err != nil {
+		return nil, nil, err
+	}
+	if observability.TracingEnabled() {
+		log.Info("tracing enabled (OTLP)")
+	}
+	m := observability.NewMetrics(service, cfg.Version)
+	m.Registry.MustRegister(observability.NewPoolCollector(pool))
+	m.Serve(ctx, cfg.MetricsAddr, log)
+	flush := func() {
+		fctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdown(fctx); err != nil {
+			log.Warn("trace flush failed", "err", err)
+		}
+	}
+	return m, flush, nil
+}
+
 func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	in, err := buildInfra(ctx, cfg, log, cfg.AIServiceTimeout)
 	if err != nil {
 		return err
 	}
 	defer in.close()
-	if err := migrateAll(ctx, in.pool, log); err != nil {
+	metrics, flush, err := startObservability(ctx, cfg, log, "api", in.pool)
+	if err != nil {
+		return err
+	}
+	defer flush()
+	var draining atomic.Bool
+	if err := startupMigrations(ctx, cfg, in.pool, log); err != nil {
 		return err
 	}
 
@@ -278,6 +318,8 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 				Apps: appsSvc, Prep: prepSvc, Guard: automation.NewGuard(in.pool), AI: in.ai, Log: log}), authH, limiter),
 			Notifications: notifications.NewHTTP(notifications.NewService(in.pool, log)),
 			Analytics:     analytics.NewHTTP(analytics.NewService(in.pool, matching.AlgorithmVersion), limiter),
+			Privacy:       privacy.NewHTTP(privacy.NewService(in.pool, in.store, revoker(gmailSvc), log), authSvc, authH, limiter),
+			Metrics:       metrics, Limiter: limiter, Draining: &draining,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       cfg.HTTPReadTimeout,
@@ -299,6 +341,13 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		return err
 	case <-ctx.Done():
 	}
+	// Fail readiness first so load balancers stop sending new requests, then
+	// stop accepting connections and let in-flight requests finish.
+	draining.Store(true)
+	if cfg.HTTPShutdownDrain > 0 {
+		log.Info("draining before shutdown", "drain", cfg.HTTPShutdownDrain.String())
+		time.Sleep(cfg.HTTPShutdownDrain)
+	}
 	log.Info("shutting down", "timeout", cfg.HTTPShutdownTimeout.String())
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTPShutdownTimeout)
 	defer cancel()
@@ -316,9 +365,15 @@ func worker(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		return err
 	}
 	defer in.close()
-	if err := migrateAll(ctx, in.pool, log); err != nil {
+	if err := startupMigrations(ctx, cfg, in.pool, log); err != nil {
 		return err
 	}
+	metrics, flush, err := startObservability(ctx, cfg, log, "worker", in.pool)
+	if err != nil {
+		return err
+	}
+	defer flush()
+	metrics.Registry.MustRegister(observability.NewQueueCollector(in.pool))
 
 	workers := river.NewWorkers()
 	if in.store == nil || in.ai == nil {
@@ -330,6 +385,11 @@ func worker(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		extract.Store = in.store
 	}
 	river.AddWorker(workers, extract)
+	sweep := &documents.OrphanSweepWorker{Pool: in.pool, Log: log}
+	if in.store != nil {
+		sweep.Store = in.store
+	}
+	river.AddWorker(workers, sweep)
 	discSvc := discovery.NewService(in.pool, sources.NewRegistry(newFetcher(cfg)), log)
 	river.AddWorker(workers, &discovery.DiscoverAllWorker{Pool: in.pool})
 	river.AddWorker(workers, &discovery.DiscoverSourceWorker{Service: discSvc, Log: log,
@@ -377,19 +437,50 @@ func worker(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	periodic = append(periodic, workflows.PeriodicJobs()...)
 	periodic = append(periodic, notifications.PeriodicJobs()...)
 	periodic = append(periodic, analytics.PeriodicJobs()...)
+	periodic = append(periodic, documents.PeriodicJobs()...)
 	client, err := jobs.NewWorkerClient(in.pool, workers, log, 4, periodic...)
 	if err != nil {
 		return err
 	}
-	if err := client.Start(ctx); err != nil {
+	events, unsubscribe := client.Subscribe(river.EventKindJobCompleted, river.EventKindJobFailed, river.EventKindJobCancelled,
+		river.EventKindJobSnoozed, river.EventKindJobInterrupted)
+	defer unsubscribe()
+	go recordJobEvents(events, metrics)
+	// River cancels running jobs when the context given to Start is
+	// cancelled, so it must not be the signal context: SIGTERM triggers the
+	// graceful Stop below instead.
+	if err := client.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("start worker: %w", err)
 	}
 	log.Info("worker started")
 	<-ctx.Done()
-	log.Info("worker stopping")
-	stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Graceful stop lets running jobs finish. If they outlast the budget they
+	// are cancelled; River re-runs interrupted jobs and every job is
+	// idempotent, so nothing is lost or duplicated.
+	log.Info("worker stopping", "timeout", cfg.WorkerShutdownTimeout.String())
+	stopCtx, cancel := context.WithTimeout(context.Background(), cfg.WorkerShutdownTimeout)
 	defer cancel()
-	return client.Stop(stopCtx)
+	if err := client.Stop(stopCtx); err != nil {
+		log.Warn("graceful stop timed out; cancelling running jobs", "err", err)
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		return client.StopAndCancel(cctx)
+	}
+	return nil
+}
+
+func recordJobEvents(events <-chan *river.Event, m *observability.Metrics) {
+	for ev := range events {
+		if ev == nil || ev.Job == nil {
+			continue
+		}
+		outcome := strings.TrimPrefix(string(ev.Kind), "job_")
+		var run, wait time.Duration
+		if ev.JobStats != nil {
+			run, wait = ev.JobStats.RunDuration, ev.JobStats.QueueWaitDuration
+		}
+		m.JobFinished(ev.Job.Kind, outcome, run, wait)
+	}
 }
 
 func notConfigured(context.Context) error { return health.ErrNotConfigured }
@@ -460,6 +551,79 @@ func newGmail(cfg config.Config, in *infra, log *slog.Logger) (*gmail.Service, e
 		log.Warn("gmail not configured: outreach sending and reply detection are disabled")
 		return nil, nil
 	}
+	sealer, err := cfg.Keyring()
+	if err != nil {
+		return nil, fmt.Errorf("encryption keyring: %w", err)
+	}
 	return gmail.New(in.pool, gmail.Config{ClientID: cfg.GoogleClientID, ClientSecret: cfg.GoogleClientSecret, RedirectURL: cfg.GoogleRedirectURL,
-		AuthURL: cfg.GoogleAuthURL, TokenURL: cfg.GoogleTokenURL, RevokeURL: cfg.GoogleRevokeURL, APIBase: cfg.GmailAPIBase}, cfg.DataEncryptionKey, log)
+		AuthURL: cfg.GoogleAuthURL, TokenURL: cfg.GoogleTokenURL, RevokeURL: cfg.GoogleRevokeURL, APIBase: cfg.GmailAPIBase}, sealer, log)
+}
+
+// keysCmd reports and rotates the encryption key used for secrets at rest
+// (KI-038). Rotation: set the new key as DATA_ENCRYPTION_KEY with a new
+// DATA_ENCRYPTION_KEY_VERSION, keep the old one in
+// DATA_ENCRYPTION_KEYS_RETIRED, deploy, run `keys rotate`, confirm with
+// `keys status`, then remove the retired key.
+func keysCmd(ctx context.Context, cfg config.Config, args []string) error {
+	if len(args) != 1 || (args[0] != "status" && args[0] != "rotate") {
+		return errors.New("usage: careerpilot keys <status|rotate>")
+	}
+	pool, err := db.Connect(ctx, cfg.DatabaseURL, 2)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	if args[0] == "rotate" {
+		sealer, err := cfg.Keyring()
+		if err != nil {
+			return fmt.Errorf("encryption keyring: %w", err)
+		}
+		if sealer == nil {
+			return errors.New("DATA_ENCRYPTION_KEY is not set")
+		}
+		res, err := gmail.RotateKeys(ctx, pool, sealer)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("current key version %d: resealed=%d already_current=%d unreadable=%d oauth_states_dropped=%d\n",
+			sealer.Current(), res.Resealed, res.Current, res.Unreadable, res.StatesDropped)
+		if res.Unreadable > 0 {
+			fmt.Println("unreadable values need a key that is not configured; those users must reconnect Gmail")
+		}
+	}
+	st, err := gmail.KeyVersions(ctx, pool)
+	if err != nil {
+		return err
+	}
+	if len(st) == 0 {
+		fmt.Println("no sealed secrets stored")
+	}
+	for _, s := range st {
+		fmt.Printf("%-24s key_version=%d count=%d\n", s.Table, s.Version, s.Count)
+	}
+	return nil
+}
+
+// revoker avoids wrapping a nil *gmail.Service in a non-nil interface.
+func revoker(g *gmail.Service) privacy.Revoker {
+	if g == nil {
+		return nil
+	}
+	return g
+}
+
+// startupMigrations applies migrations at start unless MIGRATE_ON_START=false,
+// in which case it refuses to start against an outdated schema.
+func startupMigrations(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, log *slog.Logger) error {
+	if cfg.MigrateOnStart {
+		return migrateAll(ctx, pool, log)
+	}
+	cur, latest, err := db.MigrationStatus(ctx, pool)
+	if err != nil {
+		return err
+	}
+	if cur < latest {
+		return fmt.Errorf("database schema is at %d but this build needs %d: run `careerpilot migrate up` first", cur, latest)
+	}
+	return nil
 }

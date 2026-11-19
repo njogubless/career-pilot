@@ -427,6 +427,26 @@ func (s *Service) ChangePassword(ctx context.Context, p Principal, in ChangePass
 	})
 }
 
+// Reauthenticate confirms the signed-in user's password before a sensitive
+// action (data export, account deletion). Attempts are rate limited.
+func (s *Service) Reauthenticate(ctx context.Context, userID uuid.UUID, password string) error {
+	if err := s.allow(ctx, "reauth:user:"+userID.String(), 10, time.Hour); err != nil {
+		return err
+	}
+	u, err := userByID(ctx, s.pool, userID)
+	if err != nil {
+		return err
+	}
+	ok, err := crypto.VerifyPassword(password, u.PasswordHash)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return httpx.Validation(map[string]string{"password": "The password is incorrect."})
+	}
+	return nil
+}
+
 func (s *Service) UpdateDisplayName(ctx context.Context, p Principal, raw string) (User, error) {
 	name, msg := validateDisplayName(raw)
 	if msg != "" {

@@ -36,8 +36,10 @@ import (
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/db"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/ids"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/mailer"
+	"github.com/careerpilot/careerpilot/services/api/internal/platform/observability"
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/ratelimit"
 	"github.com/careerpilot/careerpilot/services/api/internal/preparation"
+	"github.com/careerpilot/careerpilot/services/api/internal/privacy"
 	"github.com/careerpilot/careerpilot/services/api/internal/profiles"
 	"github.com/careerpilot/careerpilot/services/api/internal/server"
 	"github.com/careerpilot/careerpilot/services/api/internal/sources"
@@ -127,6 +129,7 @@ type App struct {
 	Workflows     *workflows.Engine
 	Notifications *notifications.Service
 	Analytics     *analytics.Service
+	Metrics       *observability.Metrics
 }
 
 // Options customise the app under test.
@@ -138,6 +141,8 @@ type Options struct {
 	// (empty: Gmail not configured).
 	GoogleURL string
 	Resolver  outreach.Resolver
+	// RateLimitPerMinute enables the global API limit (0: disabled).
+	RateLimitPerMinute int
 }
 
 func New(t *testing.T, opts Options) *App {
@@ -145,7 +150,13 @@ func New(t *testing.T, opts Options) *App {
 	pool := NewDB(t)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := config.Config{Env: config.EnvTest, Version: "test", MaxBodyBytes: 1 << 20, MaxUploadBytes: 2 << 20,
-		AppBaseURL: "http://app.test", SessionIdleTTL: time.Hour, SessionAbsTTL: 24 * time.Hour}
+		AppBaseURL: "http://app.test", SessionIdleTTL: time.Hour, SessionAbsTTL: 24 * time.Hour,
+		RateLimitPerMinute: opts.RateLimitPerMinute}
+	metrics := observability.NewMetrics("api", "test")
+	var globalLimiter ratelimit.Limiter
+	if opts.RateLimitPerMinute > 0 {
+		globalLimiter = ratelimit.NewMemory()
+	}
 
 	jobClient, err := jobs.NewInsertClient(pool, log)
 	if err != nil {
@@ -181,10 +192,13 @@ func New(t *testing.T, opts Options) *App {
 	var gmailSvc *gmail.Service
 	if opts.GoogleURL != "" {
 		g := opts.GoogleURL
-		var err error
+		sealer, err := crypto.NewSealer([]byte("0123456789abcdef0123456789abcdef"))
+		if err != nil {
+			t.Fatal(err)
+		}
 		gmailSvc, err = gmail.New(pool, gmail.Config{ClientID: "test-client", ClientSecret: "test-secret",
 			RedirectURL: "http://app.test/api/v1/integrations/gmail/callback", AuthURL: g + "/auth", TokenURL: g + "/token",
-			RevokeURL: g + "/revoke", APIBase: g}, []byte("0123456789abcdef0123456789abcdef"), log)
+			RevokeURL: g + "/revoke", APIBase: g}, sealer, log)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -203,10 +217,12 @@ func New(t *testing.T, opts Options) *App {
 		Applications: applications.NewHTTP(appsSvc, authH), Automation: automation.NewHTTP(automation.NewService(pool), authH),
 		Gmail: gmail.NewHTTP(gmailSvc, authH, cfg.AppBaseURL), Outreach: outreach.NewHTTP(outSvc, authH, ratelimit.NewMemory()),
 		GmailReady: gmailSvc != nil, Workflows: workflows.NewHTTP(engine, authH, ratelimit.NewMemory()),
-		Notifications: notifications.NewHTTP(notifSvc), Analytics: analytics.NewHTTP(anSvc, ratelimit.NewMemory())})
+		Notifications: notifications.NewHTTP(notifSvc), Analytics: analytics.NewHTTP(anSvc, ratelimit.NewMemory()),
+		Metrics: metrics, Limiter: globalLimiter,
+		Privacy: privacy.NewHTTP(privacy.NewService(pool, st, privacyRevoker(gmailSvc), log), authSvc, authH, ratelimit.NewMemory())})
 	return &App{Handler: h, Pool: pool, Store: store, Mail: mail, Jobs: jobClient, AI: ai, Log: log, Discovery: disc, Matching: matchSvc,
 		Preparation: prep, Applications: appsSvc, Outreach: outSvc, Workflows: engine,
-		Notifications: notifSvc, Analytics: anSvc}
+		Notifications: notifSvc, Analytics: anSvc, Metrics: metrics}
 }
 
 // Exec runs SQL directly (assertions on persisted state).
@@ -224,4 +240,11 @@ func (a *App) QueryInt(t *testing.T, sql string, args ...any) int {
 		t.Fatalf("query %q: %v", sql, err)
 	}
 	return n
+}
+
+func privacyRevoker(g *gmail.Service) privacy.Revoker {
+	if g == nil {
+		return nil
+	}
+	return g
 }

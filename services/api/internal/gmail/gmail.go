@@ -56,13 +56,9 @@ type Service struct {
 }
 
 // New returns nil when Gmail is not configured; callers report that honestly.
-func New(pool *pgxpool.Pool, cfg Config, key []byte, log *slog.Logger) (*Service, error) {
-	if cfg.ClientID == "" || cfg.ClientSecret == "" || len(key) != 32 {
+func New(pool *pgxpool.Pool, cfg Config, sealer *crypto.Sealer, log *slog.Logger) (*Service, error) {
+	if cfg.ClientID == "" || cfg.ClientSecret == "" || sealer == nil {
 		return nil, nil
-	}
-	sealer, err := crypto.NewSealer(key)
-	if err != nil {
-		return nil, err
 	}
 	return &Service{pool: pool, cfg: cfg, sealer: sealer, http: &http.Client{Timeout: 20 * time.Second}, log: log, now: time.Now}, nil
 }

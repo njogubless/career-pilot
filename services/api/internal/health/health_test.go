@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -68,5 +69,18 @@ func TestReadyTimeoutAndPanic(t *testing.T) {
 	}
 	if body.Checks["slow"].Status != "fail" || body.Checks["panicky"].Status != "fail" {
 		t.Fatalf("checks=%+v", body.Checks)
+	}
+}
+
+func TestReadinessFailsWhileDraining(t *testing.T) {
+	var drain atomic.Bool
+	h := NewHandler("v", time.Second, Checker{Name: "db", Required: true, Check: func(context.Context) error { return nil }}).WithDrain(&drain)
+	if code, _ := runReady(t, h); code != http.StatusOK {
+		t.Fatalf("before drain: %d", code)
+	}
+	drain.Store(true)
+	code, body := runReady(t, h)
+	if code != http.StatusServiceUnavailable || body.Status != "draining" {
+		t.Fatalf("while draining: %d %+v", code, body)
 	}
 }

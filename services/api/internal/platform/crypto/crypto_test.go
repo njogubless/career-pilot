@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -78,5 +79,45 @@ func TestSealerRoundTripAndBinding(t *testing.T) {
 	}
 	if _, err := NewSealer([]byte("short")); err == nil {
 		t.Fatal("short key accepted")
+	}
+}
+
+func TestKeyringRotation(t *testing.T) {
+	oldKey, newKey := bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32)
+	old, err := NewKeyring(1, map[byte][]byte{1: oldKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aad := []byte("user-1")
+	sealed, err := old.Seal([]byte("refresh-token"), aad)
+	if err != nil || Version(sealed) != 1 {
+		t.Fatalf("seal v1: %v %d", err, Version(sealed))
+	}
+	// New current key, old one retired but readable.
+	ring, err := NewKeyring(2, map[byte][]byte{1: oldKey, 2: newKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pt, err := ring.Open(sealed, aad)
+	if err != nil || string(pt) != "refresh-token" {
+		t.Fatalf("open retired: %v", err)
+	}
+	resealed, err := ring.Seal(pt, aad)
+	if err != nil || Version(resealed) != 2 {
+		t.Fatalf("reseal: %v %d", err, Version(resealed))
+	}
+	// Once the retired key is removed, only re-sealed values open.
+	newOnly, _ := NewKeyring(2, map[byte][]byte{2: newKey})
+	if _, err := newOnly.Open(sealed, aad); err == nil {
+		t.Fatal("v1 value opened without its key")
+	}
+	if _, err := newOnly.Open(resealed, aad); err != nil {
+		t.Fatalf("v2 value: %v", err)
+	}
+	if _, err := NewKeyring(3, map[byte][]byte{2: newKey}); err == nil {
+		t.Fatal("current version missing from keyring accepted")
+	}
+	if _, err := NewKeyring(0, map[byte][]byte{0: newKey}); err == nil {
+		t.Fatal("version 0 accepted")
 	}
 }

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -19,6 +21,14 @@ type Storage interface {
 	Get(ctx context.Context, key string) ([]byte, error)
 	Delete(ctx context.Context, key string) error
 	Ping(ctx context.Context) error
+	// List calls fn for every object under prefix (orphan sweep).
+	List(ctx context.Context, prefix string, fn func(ObjectInfo) error) error
+}
+
+// ObjectInfo describes a stored object without its contents.
+type ObjectInfo struct {
+	Key      string
+	Modified time.Time
 }
 
 var ErrObjectNotFound = errors.New("object not found")
@@ -94,24 +104,78 @@ func (s *S3) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+func (s *S3) List(ctx context.Context, prefix string, fn func(ObjectInfo) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // stops the listing goroutine if fn returns early
+	for obj := range s.c.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if obj.Err != nil {
+			return fmt.Errorf("list objects: %w", obj.Err)
+		}
+		if err := fn(ObjectInfo{Key: obj.Key, Modified: obj.LastModified}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Ping fails when the store is unreachable or the bucket does not exist
+// (uploads would fail), so readiness reflects both.
 func (s *S3) Ping(ctx context.Context) error {
-	_, err := s.c.BucketExists(ctx, s.bucket)
-	return err
+	exists, err := s.c.BucketExists(ctx, s.bucket)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("bucket %q does not exist", s.bucket)
+	}
+	return nil
 }
 
 // Memory is an in-process Storage for tests.
 type Memory struct {
 	mu   sync.Mutex
 	objs map[string][]byte
+	mods map[string]time.Time
 }
 
-func NewMemory() *Memory { return &Memory{objs: map[string][]byte{}} }
+func NewMemory() *Memory { return &Memory{objs: map[string][]byte{}, mods: map[string]time.Time{}} }
 
 func (m *Memory) Put(_ context.Context, key string, data []byte, _ string) error {
+	return m.PutAt(key, data, time.Now())
+}
+
+// PutAt stores an object with an explicit modification time (tests).
+func (m *Memory) PutAt(key string, data []byte, at time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.objs[key] = append([]byte(nil), data...)
+	m.mods[key] = at
 	return nil
+}
+
+func (m *Memory) List(_ context.Context, prefix string, fn func(ObjectInfo) error) error {
+	m.mu.Lock()
+	var infos []ObjectInfo
+	for k := range m.objs {
+		if strings.HasPrefix(k, prefix) {
+			infos = append(infos, ObjectInfo{Key: k, Modified: m.mods[k]})
+		}
+	}
+	m.mu.Unlock()
+	for _, i := range infos {
+		if err := fn(i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Has reports whether key is stored (tests).
+func (m *Memory) Has(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.objs[key]
+	return ok
 }
 
 func (m *Memory) Get(_ context.Context, key string) ([]byte, error) {
@@ -128,6 +192,7 @@ func (m *Memory) Delete(_ context.Context, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.objs, key)
+	delete(m.mods, key)
 	return nil
 }
 

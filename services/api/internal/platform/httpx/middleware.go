@@ -10,6 +10,8 @@ import (
 	"runtime/debug"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/careerpilot/careerpilot/services/api/internal/platform/logging"
 )
 
@@ -34,7 +36,12 @@ func RequestID(base *slog.Logger) func(http.Handler) http.Handler {
 			}
 			w.Header().Set("X-Request-ID", id)
 			ctx := context.WithValue(r.Context(), requestIDKey{}, id)
-			ctx = logging.WithLogger(ctx, base.With("request_id", id))
+			l := base.With("request_id", id)
+			// Correlate logs with traces when a sampled span is active.
+			if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+				l = l.With("trace_id", sc.TraceID().String())
+			}
+			ctx = logging.WithLogger(ctx, l)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

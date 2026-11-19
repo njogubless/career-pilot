@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"os"
 	"strings"
 	"testing"
 )
@@ -88,5 +89,74 @@ func TestEncryptionKeyMustBe32Bytes(t *testing.T) {
 	}))
 	if err == nil || !strings.Contains(err.Error(), "32 bytes") {
 		t.Fatalf("expected key length error, got %v", err)
+	}
+}
+
+func TestSecretsCanComeFromFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/session"
+	if err := os.WriteFile(path, []byte("  a-session-secret-from-a-mounted-file-xyz\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(lookupFrom(map[string]string{"DATABASE_URL": "postgres://localhost/db", "SESSION_SECRET_FILE": path}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.SessionSecret != "a-session-secret-from-a-mounted-file-xyz" {
+		t.Fatalf("secret not read from file (got %d chars)", len(c.SessionSecret))
+	}
+
+	// Both set is ambiguous and rejected; a missing file is an error that
+	// names the path but never contents.
+	_, err = Load(lookupFrom(map[string]string{"DATABASE_URL": "postgres://localhost/db", "SESSION_SECRET": "x", "SESSION_SECRET_FILE": path}))
+	if err == nil || !strings.Contains(err.Error(), "set only one") {
+		t.Fatalf("expected ambiguity error, got %v", err)
+	}
+	_, err = Load(lookupFrom(map[string]string{"DATABASE_URL": "postgres://localhost/db", "SESSION_SECRET_FILE": dir + "/missing"}))
+	if err == nil || !strings.Contains(err.Error(), "SESSION_SECRET_FILE: cannot read") {
+		t.Fatalf("expected read error, got %v", err)
+	}
+}
+
+func TestRateLimitAndDrainBounds(t *testing.T) {
+	c, err := Load(lookupFrom(map[string]string{"DATABASE_URL": "postgres://localhost/db"}))
+	if err != nil || c.RateLimitPerMinute != 300 || c.HTTPShutdownDrain != 0 || c.MetricsAddr != "" {
+		t.Fatalf("unexpected defaults: %+v %v", c, err)
+	}
+	_, err = Load(lookupFrom(map[string]string{"DATABASE_URL": "postgres://localhost/db", "API_RATE_LIMIT_PER_MINUTE": "-1", "API_HTTP_SHUTDOWN_DRAIN": "5m"}))
+	if err == nil || !strings.Contains(err.Error(), "API_RATE_LIMIT_PER_MINUTE") || !strings.Contains(err.Error(), "API_HTTP_SHUTDOWN_DRAIN") {
+		t.Fatalf("expected bound errors, got %v", err)
+	}
+}
+
+func TestRetiredEncryptionKeys(t *testing.T) {
+	k := func(b byte) string {
+		return base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string(rune('a'+b)), 32)))
+	}
+	c, err := Load(lookupFrom(map[string]string{"DATABASE_URL": "postgres://localhost/db", "DATA_ENCRYPTION_KEY": k(2),
+		"DATA_ENCRYPTION_KEY_VERSION": "2", "DATA_ENCRYPTION_KEYS_RETIRED": "1:" + k(1)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ring, err := c.Keyring()
+	if err != nil || ring.Current() != 2 || len(c.RetiredEncryptionKeys) != 1 {
+		t.Fatalf("keyring: %v %+v", err, c.RetiredEncryptionKeys)
+	}
+	for _, bad := range []string{"2:" + k(1), "x:" + k(1), "1:short", "1:" + k(1) + ",1:" + k(3)} {
+		_, err := Load(lookupFrom(map[string]string{"DATABASE_URL": "postgres://localhost/db", "DATA_ENCRYPTION_KEY": k(2),
+			"DATA_ENCRYPTION_KEY_VERSION": "2", "DATA_ENCRYPTION_KEYS_RETIRED": bad}))
+		if err == nil || !strings.Contains(err.Error(), "DATA_ENCRYPTION_KEYS_RETIRED") {
+			t.Fatalf("%q accepted: %v", bad, err)
+		}
+	}
+}
+
+func TestDatabaseOnlyConfigForMigrations(t *testing.T) {
+	c, err := LoadDatabaseOnly(lookupFrom(map[string]string{"APP_ENV": "production", "DATABASE_URL": "postgres://localhost/db"}))
+	if err != nil || c.DatabaseURL == "" {
+		t.Fatalf("migrator config: %v", err)
+	}
+	if _, err := LoadDatabaseOnly(lookupFrom(map[string]string{"APP_ENV": "production"})); err == nil {
+		t.Fatal("missing DATABASE_URL accepted")
 	}
 }

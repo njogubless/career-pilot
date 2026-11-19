@@ -14,35 +14,149 @@ Public API base path `/api/v1` (Go). Internal AI service base path `/internal/v1
 - **Pagination:** cursor-based, `?limit=25&cursor=...`, response `{"data":[...],"next_cursor":"..."|null}`.
 - **Filtering and sorting:** explicit query parameters per resource, e.g. `?sort=-match_score`. Unknown values are rejected with 422.
 - **Idempotency:** the `Idempotency-Key` header on POSTs that create side effects. A replay returns the stored response, and the same key with a different body returns 409.
-- **Rate limits:** `429` with `Retry-After`.
+- **Rate limits:** `429` with `Retry-After`. Besides the per-action limits below, every `/api/v1` route is limited per signed-in user (or per IP when signed out) to `API_RATE_LIMIT_PER_MINUTE` (300). The web proxy also applies edge limits per address, and its 429 is an HTML page rather than the JSON envelope (ADR-026).
 
 ## 2. Public endpoints
+
+**Implemented as of Phase 2.** Every other row is planned.
+- health, meta
+- `auth/*`: register, login, logout, logout-all, session, password forgot/reset/change
+- `GET/PATCH /users/me`
+- `GET /profiles/me`, `PUT /profiles/me/basics`, `GET/PUT /profiles/me/preferences`, `GET /profiles/me/completeness`
+- `POST /profiles/me/{kind}`, `PUT/DELETE /profiles/me/{kind}/{id}`, `PUT /profiles/me/{kind}/{id}/verification`
+- `POST/GET /documents`, `GET /documents/{id}/download`, `DELETE /documents/{id}`
+- `POST /documents/{id}/extractions`, `GET /documents/{id}/extractions/latest`
+- `GET /profile-extractions/{id}`, `POST /profile-extractions/{id}/apply`, `POST /profile-extractions/{id}/discard`
+- Internal: `/internal/v1/info`, `/internal/v1/cv/extract`
+
+**Added in Phase 3:**
+- `GET /jobs`:
+  - Filters: `q`, `remote`, `country`, `source`, `employment`, `posted_within`, `salary_disclosed`, `min_salary` + `currency`, `company`, `sort`, `limit`, `cursor`.
+  - Response: `{data, next_cursor, total}`.
+  - Unknown salaries are kept unless `salary_disclosed=true`, and currencies are never converted.
+- `GET /jobs/{id}`.
+- `GET/POST /saved-searches`, `DELETE /saved-searches/{id}`.
+- `GET /job-sources`.
+- `GET /discovery/runs`, and `POST /discovery/runs` (202; `queued:false` when deduplicated).
+- `GET /dashboard/overview`.
+- Admin (role `admin`; returns 404 for other users): `GET/POST /admin/job-sources`, `PATCH /admin/job-sources/{id}`.
+
+**Automation and analytics (Phase 9, ADR-025).**
+- **Schedules:** `GET /workflow-schedules`; `POST /workflow-schedules` takes `{name, objective, template, params, cadence: DAILY|WEEKLY, weekday (0–6, weekly only), hour (0–23), timezone (IANA), enabled}` and returns 201 with `next_run_at`. Invalid fields return 422, a sixth schedule returns 409. `PUT /workflow-schedules/{id}` takes the same body; `DELETE` returns 204 (runs are kept). Another user's schedule returns 404.
+- **Notifications:** `GET /notifications?limit&unread` returns `{data: [{id, kind, title, body, link, read_at, created_at}], unread_count}`. `POST /notifications/{id}/read` and `POST /notifications/read-all` return 204. `GET/PUT /notifications/preferences`; `min_match_score` outside 50–100 returns 422.
+- **Analytics:** `GET /analytics/overview?period=30|90|365|0` (0 = all time; anything else returns 422) returns `{funnel, durations, outreach, sources, skill_weeks, skill_trends, weekly, computed_at}`. Rates are `{numerator, denominator, value|null, low_sample}`.
+- **Reports:** `GET /analytics/reports`, `GET /analytics/reports/{id}`, `POST /analytics/reports` (last 7 days, 201; 429 after 10 per hour).
+
+**Data rights (Phase 10, ADR-027).**
+- `POST /users/me/export` takes `{password}` and returns 200 `application/zip` (attachment) containing `README.txt`, `data.json` (`{format: "export-v1", exported_at, user_id, tables: {<table>: [rows]}}`) and `documents/<id>-<filename>`. A wrong password returns 422 (`details.password`); more than 5 exports per hour returns 429.
+- `POST /users/me/delete` takes `{password, confirm: "DELETE"}` and returns 204, clearing the session cookie. A missing confirmation or a wrong password returns 422. The deletion is permanent.
 
 | Area | Method & path | Purpose | Phase | Status |
 |---|---|---|---|---|
 | health | `GET /healthz`, `GET /readyz` | liveness / readiness | 1 | see tracker |
 | meta | `GET /api/v1/meta` | version, enabled integrations (honest availability) | 1 | see tracker |
 | auth | `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/session`, `POST /auth/password/forgot`, `POST /auth/password/reset` | | 2 | |
-| users | `GET/PATCH /users/me`, `POST /users/me/export`, `DELETE /users/me` | | 2/10 | |
+| users | `GET/PATCH /users/me`, `POST /users/me/export`, `POST /users/me/delete` | profile, data export, account deletion | 2/10 | implemented (ADR-027) |
 | profiles | `GET/PATCH /profiles/me`, CRUD `/profiles/me/{experiences,education,skills,certifications,projects}`, `POST /profiles/me/facts/{id}/verify` | | 2 | |
 | preferences | `GET/PUT /profiles/me/preferences` | | 2 | |
 | documents | `POST /documents` (upload), `GET /documents`, `GET /documents/{id}/download`, `DELETE /documents/{id}`, `GET /documents/{id}/versions` | | 2/5 | |
 | extraction | `POST /documents/{id}/extract`, `GET /profile-extractions/{id}`, `POST /profile-extractions/{id}/apply` | CV → reviewed profile | 2 | |
+**Added in Phase 4:**
+- `GET /jobs`: each item has `match` (`{score, eligibility, confidence}` or null). `sort=match` ranks scored jobs and sinks ineligible ones.
+- `GET /matches`:
+  - Query: `eligibility` = ELIGIBLE, UNKNOWN, INELIGIBLE or ALL (default: everything except INELIGIBLE); `min_score`; `include_dismissed`; `limit`; `cursor`.
+  - Response: `{data:[{job, score, eligibility, confidence, missing_skills, signals, blockers, feedback, computed_at}], next_cursor, total, state}`.
+- `GET /matches/status`. `POST /matches/recompute` returns 202 and is rate-limited to 10 per hour.
+- `GET /matches/skill-gaps`: missing core skills across the top 50 non-ineligible matches.
+- `GET /jobs/{id}/match` computes on demand.
+  - Response: `{status, message?, match, analysis, feedback, deep_analysis_available, computed_at, disclaimer}`.
+  - `status` is READY, PROFILE_INCOMPLETE, ANALYSIS_PENDING or AI_UNAVAILABLE. When it is not READY, `match` is null; a score is never guessed.
+- `PUT /jobs/{id}/match/feedback` with `{rating: UP|DOWN, reason?, note?, dismissed?}`. `DELETE` the same path to clear it.
+- `POST /jobs/{id}/analysis` queues a deep (LLM) analysis.
+  - Returns 202, or 200 when a current analysis already exists.
+  - Returns 503 `AI_PROVIDER_UNAVAILABLE` without a provider.
+  - Rate-limited to 20 per user per day, and audited.
+- Internal: `POST /internal/v1/jobs/analyze` (`mode` deterministic for batches of up to 64, or llm for a single job; optional embeddings), `POST /internal/v1/skills/normalize` (terms and texts), `POST /internal/v1/embeddings`. `/info` adds `embedding_model`, `catalogue_version` and `analyzer_versions`.
+
+**Implemented in Phase 5: application preparation (ADR-021).** All routes need a session, are scoped to the user (other users get 404) and are audited.
+- `POST /jobs/{id}/application-documents` takes `{kind: CV|COVER_LETTER|APPLICATION_ANSWERS, source: AI|PROFILE, notes?, questions?}`. `questions` is required for answers (1–25, each ≤ 1,000 chars); `notes` is ≤ 4,000 chars.
+  - `AI` returns 202 `{document, generation}` and queues a generation. It needs an LLM (otherwise 503 `AI_PROVIDER_UNAVAILABLE`), allows one active generation per document (otherwise 409) and is limited to 20 per user per hour (429).
+  - `PROFILE` returns 201 `{document}` immediately, built from verified facts with no AI.
+- `GET /application-documents[?job_id=]` lists documents. `GET /application-documents/{id}` returns the document, `current_version`, `latest_generation` and the user's citable `facts`. `DELETE /application-documents/{id}` deletes it with all versions.
+- `PUT /application-documents/{id}/content` takes `{base_version_id, content}` and creates a `USER_EDIT` version.
+  - The content is sanitised, and structural text is re-rendered from the profile.
+  - A stale base returns 409; identical content returns the current version.
+- `POST /application-documents/{id}/recheck` returns a fresh validation against the current profile. It is not stored.
+- `POST /application-documents/{id}/approval` takes `{version_id, acknowledge_issues}`.
+  - Only the current version can be approved, and it is re-validated first.
+  - Incomplete content returns 422; unacknowledged errors return 422 with the `validation` in the body.
+  - `DELETE` revokes the approval.
+- `GET /application-documents/{id}/versions` lists versions; `GET …/versions/{vid}` returns one; `POST …/versions/{vid}/restore` creates a `RESTORED` version.
+- `GET …/versions/{vid}/export?format=docx|txt|md` downloads an attachment with `Cache-Control: no-store`. PDF comes from the web print view (`/prepare/{id}/print`).
+
+**Implemented in Phase 6: applications and execution (ADR-022).** All routes need a session, are scoped to the user (other users get 404) and are audited.
+- `POST /applications` takes `{job_id, status?: DISCOVERED|SHORTLISTED, notes?}` and returns 201 with the detail. A duplicate (including a collapsed cross-source duplicate) returns 409 with `details.application_id`.
+- `GET /applications[?status=&q=]`, `GET /applications/stats` (by status, active, awaiting approval, interviewing, offers, submitted, `response_rate` and `median_days_to_response`, both null until measurable), `GET /applications/activity?limit=` (1–100) and `GET /jobs/{id}/application` (`{application: summary|null}`).
+- `GET /applications/{id}` returns the detail: summary, notes, pinned versions, `package` (`documents`, `ready`, `blockers`, `warnings`), `allowed_transitions`, `channels` (with availability), `history`, `attempts`, `evidence` and `automation`. `PUT /applications/{id}/notes` updates notes. `DELETE /applications/{id}` returns 409 once submitted.
+- `POST /applications/{id}/transitions` takes `{to, reason?}`. It accepts plain status changes only; guarded targets and invalid edges return 409 `INVALID_STATE_TRANSITION`. Moving to `AWAITING_APPROVAL` needs a ready package (otherwise 422).
+- `POST /applications/{id}/approval` takes `{channel, confirm: true}` and pins the approved document versions. An unavailable channel or a missing confirmation returns 422. `DELETE` revokes the approval and cancels any pending attempt.
+- `POST /applications/{id}/submissions` requires an `Idempotency-Key` header (8–100 chars). It returns 201 `{attempt, replayed:false}`, or 200 with `replayed:true` for the same key.
+  - It returns 409 when the application is not approved, an attempt is already pending, the pinned documents' approval changed, or the key was used elsewhere.
+  - It returns 403 when the automation guard refuses the action, and 429 when the daily limit is reached.
+- `POST /applications/{id}/submissions/{aid}/confirm` takes `{attest: true, type?: USER_ATTESTED, reference?, note?, document_id?, occurred_at?}` and moves the application to `SUBMITTED`. `…/fail` takes `{reason, message?}` and moves it to `FAILED`. `…/cancel` cancels the attempt.
+- `GET/PUT /automation/settings` (`{mode, daily_submission_limit}`), `POST /automation/pause` (cancels automated attempts in progress) and `POST /automation/resume`.
+
+**Implemented in Phase 7: recruiter outreach (ADR-023).** All routes need a session, are scoped to the user and are audited.
+- **Gmail.**
+  - `GET /integrations/gmail` returns `{configured, account, scopes_requested}`.
+  - `POST /integrations/gmail/connect` returns `{auth_url}`; the browser then goes to Google.
+  - `GET /integrations/gmail/callback?state&code` is Google's redirect. It always redirects to `/settings?gmail=connected|error[&message]`.
+  - `DELETE /integrations/gmail` revokes the grant and deletes the tokens.
+  - Without OAuth configuration, connect and disconnect return 503.
+- **Contacts.**
+  - `GET /contacts[?job_id]`, `POST /contacts`, `GET/PUT/DELETE /contacts/{id}` (delete returns 409 once messages exist; use do-not-contact).
+  - `POST /contacts/{id}/verify` re-runs the DNS check.
+  - `POST /jobs/{id}/contacts/discover` returns `{data:[{contact, created}]}`, built only from addresses the posting publishes for recruiting.
+- **Messages.**
+  - `GET /outreach/messages[?status&contact_id&application_id&job_id]`.
+  - `POST /outreach/messages` takes `{contact_id, job_id?, application_id?, mode: AI|TEMPLATE, notes?, attachment_version_id?}` and returns 201 with the draft. AI mode returns 503 without an LLM and is limited to 30 per hour; a contact without an email returns 422.
+  - `GET/PUT /outreach/messages/{id}`. Editing withdraws approval; a follow-up's subject is fixed.
+  - `POST /outreach/messages/{id}/approve` takes `{confirm, acknowledge_issues}`.
+  - `POST /outreach/messages/{id}/send` requires an `Idempotency-Key`; a replay returns the same message. It returns 503 when Gmail is not configured; 409 when Gmail is not connected or needs reconnecting, the content changed since approval, the contact is do-not-contact, bounced or invalid, the cooldown applies, an introduction is still unanswered, or the key was used elsewhere; 403 when the guard refuses; 429 at the daily limit. Otherwise it returns 200 with status `SENT`, `FAILED` (Gmail 4xx) or `UNKNOWN` (Gmail 5xx or network).
+  - `POST …/cancel` and `POST …/mark-not-sent` (UNKNOWN → FAILED), and `PUT …/application` (`{application_id}`).
+- **Replies and settings.** `POST /outreach/poll` checks replies now (1 per minute) and returns `{threads_checked, replies_found, bounces_found}`. `GET/PUT /outreach/settings`.
+
+**Implemented in Phase 8: agent orchestration (ADR-024).** All routes need a session and are scoped to the user.
+- **Reference:** `GET /agents` (agents with tool allowlists, and tool contracts) and `GET /workflows/templates` (templates with their steps, plus `plan_version`).
+- **Planning:**
+  - `POST /workflows/interpret` takes `{objective}` and returns `{proposal: {template, params}, questions, summary, prompt_version}`. It needs an LLM (otherwise 503); out-of-bounds proposals return 422; it never starts anything.
+  - `POST /workflows/preview` takes `{template, params}` and returns the validated plan.
+- **Running:**
+  - `POST /workflows` takes `{objective, template, params, interpretation}` and returns 201 with the detail. It returns 422 for invalid parameters or unknown fields, 409 with 3 active workflows, and 429 after 10 starts per hour.
+  - `GET /workflows` lists runs with progress; `GET /workflows/{id}` returns the workflow, tasks, approvals and tool calls.
+  - `POST /workflows/{id}/cancel|pause|resume|retry` return the detail; invalid states return 409, and resuming while automation is paused returns 409.
+- **Approvals:**
+  - `GET /approvals[?status]`.
+  - `POST /approvals/{id}/decision` takes `{decision: APPROVE|REJECT, approved_job_ids, payload_hash}`. A stale hash returns 409; an item that did not pass the checks returns 422; a closed request returns 409.
+
+| Area | Method & path | Purpose | Phase | Status |
+|---|---|---|---|---|
 | jobs | `GET /jobs` (filters: q, remote, country, min_salary, source, posted_after, min_score), `GET /jobs/{id}` | | 3 | |
 | job-sources | `GET /job-sources` (health), admin CRUD under `/admin/job-sources` | | 3 | |
 | saved searches | CRUD `/saved-searches` | | 3 | |
-| matches | `GET /matches` (ranked), `GET /jobs/{id}/match`, `POST /matches/{id}/feedback`, `POST /matches/recompute` | | 4 | |
-| applications | `GET/POST /applications`, `GET /applications/{id}`, `POST /applications/{id}/transitions`, `POST /applications/{id}/evidence`, `GET /applications/{id}/history` | | 6 | |
-| preparation | `POST /applications/{id}/prepare`, `GET/PUT /applications/{id}/documents`, `POST /document-versions/{id}/approve` | | 5 | |
-| approvals | `GET /approvals`, `POST /approvals/{id}/approve`, `POST /approvals/{id}/reject` | | 6/8 | |
-| recruiters | CRUD `/recruiters` | | 7 | |
-| outreach | `POST /outreach/drafts`, `GET /outreach`, `POST /outreach/{id}/send` | | 7 | |
-| integrations | `GET /integrations`, `GET /integrations/gmail/connect`, `GET /integrations/gmail/callback`, `DELETE /integrations/gmail` | | 7 | |
-| search goals | CRUD `/search-goals`, `POST /search-goals/{id}/run` | | 8 | |
-| workflows | `GET /workflows`, `GET /workflows/{id}` (tasks, tool calls), `POST /workflows/{id}/cancel`, `POST /workflows/{id}/resume`, `POST /workflows/{id}/input` | | 8 | |
-| automation | `GET/PUT /automation/settings`, `POST /automation/pause`, `POST /automation/resume`, `GET/PUT /automation/permissions` | | 8 | |
-| notifications | `GET /notifications`, `POST /notifications/{id}/read` | | 8/9 | |
-| analytics | `GET /analytics/funnel`, `/analytics/sources`, `/analytics/skill-gaps`, `/analytics/timeseries` | | 9 | |
+| matches | `GET /matches` (ranked), `GET /jobs/{id}/match`, `PUT /jobs/{id}/match/feedback`, `POST /matches/recompute` | | 4 | implemented |
+| applications | `/applications/*`, `/jobs/{id}/application` (see Phase 6 above) | pipeline, state machine, approval, assisted submission, evidence, history | 6 | implemented (ADR-022) |
+| preparation | `/jobs/{id}/application-documents`, `/application-documents/*` (see Phase 5 above) | tailored CV, cover letter and answers; versions, fact check, approval, export | 5 | implemented (ADR-021) |
+| approvals | `GET /approvals`, `POST /approvals/{id}/decision` | workflow approval checkpoints | 8 | implemented |
+| recruiters | see `outreach` (`/contacts`) | | 7 | implemented |
+| outreach | `/outreach/*`, `/contacts/*`, `/jobs/{id}/contacts/discover` (see Phase 7 above) | contacts, drafts, approval, sending, replies, follow-ups | 7 | implemented (ADR-023) |
+| integrations | `GET /integrations/gmail`, `POST /integrations/gmail/connect`, `GET /integrations/gmail/callback`, `DELETE /integrations/gmail` | Gmail OAuth | 7 | implemented (ADR-023) |
+| search goals | `/workflows`, `/workflow-schedules` (objectives as workflows, optionally scheduled) | | 8 | implemented (ADR-024) |
+| workflows | `/workflows/*`, `/approvals/*`, `/agents` (see Phase 8 above) | objectives, plans, agent runs, approvals | 8 | implemented (ADR-024) |
+| automation | `GET/PUT /automation/settings`, `POST /automation/pause`, `POST /automation/resume` (Phase 6, implemented); `GET/PUT /automation/permissions` | | 6/8 | settings implemented; permissions Phase 8 |
+| notifications | `GET /notifications`, `POST /notifications/{id}/read`, `POST /notifications/read-all`, `GET/PUT /notifications/preferences` | in-app notifications | 9 | implemented (ADR-025) |
+| schedules | `GET/POST /workflow-schedules`, `PUT/DELETE /workflow-schedules/{id}` | recurring objectives | 9 | implemented (ADR-025) |
+| analytics | `GET /analytics/overview?period`, `GET/POST /analytics/reports`, `GET /analytics/reports/{id}` | funnel, sources, skill gaps, time series, reports | 9 | implemented (ADR-025) |
 | dashboard | `GET /dashboard/overview` (aggregated read model for the Overview screen) | | 3–9 | |
 
 ## 3. Internal AI service endpoints (service-token auth)
@@ -52,14 +166,14 @@ Public API base path `/api/v1` (Go). Internal AI service base path `/internal/v1
 | `GET /healthz` | liveness | 1 |
 | `GET /internal/v1/info` | provider configured?, models, prompt versions | 1 |
 | `POST /internal/v1/cv/extract` | file bytes (base64) + mime → `ProfileProposal` (fields with confidence + evidence spans) | 2 |
-| `POST /internal/v1/jobs/extract` | job text → `JobRequirements` | 4 |
-| `POST /internal/v1/skills/normalize` | terms → canonical slugs | 4 |
-| `POST /internal/v1/embeddings` | texts → vectors + model | 4 |
-| `POST /internal/v1/matches/explain` | computed breakdown → explanation | 4 |
-| `POST /internal/v1/documents/generate` | verified facts + job → structured document with fact refs | 5 |
-| `POST /internal/v1/documents/validate` | document + facts → unsupported claims | 5 |
-| `POST /internal/v1/outreach/draft` | contact + job + facts → draft | 7 |
-| `POST /internal/v1/goals/interpret` | objective text + profile summary → template + params + missing info | 8 |
+| `POST /internal/v1/jobs/analyze` | jobs → `JobAnalysis` (+ embeddings); `mode` deterministic or llm | 4 (implemented) |
+| `POST /internal/v1/skills/normalize` | terms → canonical skills; texts → mentions with evidence | 4 (implemented) |
+| `POST /internal/v1/embeddings` | texts → vectors + model | 4 (implemented) |
+| `POST /internal/v1/matches/explain` | computed breakdown → narrative | 4 (not implemented: KI-025) |
+| `POST /internal/v1/documents/generate` | `{kind, job, facts, candidate, questions}` → `{content (doc-v1), validation, questions, warnings, usage}` | 5 (implemented) |
+| `POST /internal/v1/documents/validate` | `{content, facts, candidate}` → `ValidationReport` (deterministic, no LLM) | 5 (implemented) |
+| `POST /internal/v1/outreach/draft` | `{kind, job, facts, candidate, contact}` → `{subject, greeting, paragraphs, sign_off, validation, questions, warnings, usage}` | 7 (implemented) |
+| `POST /internal/v1/goals/interpret` | `{objective}` → `{interpretation: {template, params, questions, summary}, prompt_version}` (proposal only) | 8 (implemented) |
 | `POST /internal/v1/reports/career` | aggregated metrics → narrative | 9 |
 
 Every AI response includes `meta: {provider, model, prompt_version, usage}`.

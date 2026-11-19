@@ -7,7 +7,7 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
 
-FROM nginxinc/nginx-unprivileged:1.29.3-alpine
+FROM nginxinc/nginx-unprivileged:1.31.7-alpine
 # Apply Alpine security updates (the base image can lag them; CI Trivy fails
 # on fixable HIGH and CRITICAL issues), then drop back to the nginx user.
 USER root

@@ -168,3 +168,49 @@ describe("workflow schedules", () => {
     expect(await screen.findByText(/Scheduled\. Next run/)).toBeInTheDocument();
   });
 });
+
+describe("data rights", () => {
+  it("downloads an export and deletes the account after confirmation", async () => {
+    let deleted = false;
+    const calls = mockApi({
+      ...signedIn,
+      "POST /api/v1/users/me/export": (init) =>
+        JSON.parse(String(init.body)).password === "right"
+          ? [200, {}]
+          : [422, { error: { code: "VALIDATION_FAILED", message: "x", details: { password: "The password is incorrect." } } }],
+      "GET /api/v1/auth/session": () => (deleted ? [401, { error: { code: "UNAUTHENTICATED", message: "x" } }] : signedIn["GET /api/v1/auth/session"]),
+      "POST /api/v1/users/me/delete": () => {
+        deleted = true;
+        return [204];
+      },
+    });
+    const created: string[] = [];
+    URL.createObjectURL = (() => {
+      created.push("blob");
+      return "blob:x";
+    }) as typeof URL.createObjectURL;
+    URL.revokeObjectURL = () => {};
+    const u = userEvent.setup();
+    const { router } = renderApp("/settings");
+
+    const exportPw = await screen.findByLabelText("Confirm your password");
+    await u.type(exportPw, "wrong");
+    await u.click(screen.getByRole("button", { name: "Download my data" }));
+    expect(await screen.findByText("The password is incorrect.")).toBeInTheDocument();
+    await u.clear(exportPw);
+    await u.type(exportPw, "right");
+    await u.click(screen.getByRole("button", { name: "Download my data" }));
+    expect(await screen.findByText("Your export has downloaded.")).toBeInTheDocument();
+    expect(created).toHaveLength(1);
+    expect(calls.filter((c) => c.url.endsWith("/users/me/export")).at(-1)?.headers.get("X-CSRF-Token")).toBe("csrf-123");
+
+    const del = screen.getByRole("button", { name: "Delete my account permanently" });
+    await u.type(screen.getByLabelText("Your password"), "right");
+    expect(del).toBeDisabled();
+    await u.type(screen.getByLabelText("Type DELETE to confirm"), "DELETE");
+    await u.click(del);
+    expect(await screen.findByText("Your account and its data have been deleted.")).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/login");
+    expect(calls.find((c) => c.url.endsWith("/users/me/delete"))?.body).toEqual({ password: "right", confirm: "DELETE" });
+  });
+});

@@ -42,6 +42,11 @@ export function LoginPage() {
         className="flex flex-col gap-space-md"
         onSubmit={handleSubmit((v) => login.mutate(v, { onSuccess: () => navigate(next, { replace: true }) }))}
       >
+        {params.get("deleted") === "1" && (
+          <p role="status" className="text-body-sm text-on-surface-variant">
+            Your account and its data have been deleted.
+          </p>
+        )}
         <FormError error={login.error} />
         <TextInput label="Email" type="email" autoComplete="email" error={formState.errors.email?.message} {...register("email")} />
         <TextInput

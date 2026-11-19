@@ -64,6 +64,24 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   return body as T;
 }
 
+/** POST that returns a file (data export); errors use the normal envelope. */
+export async function apiPostBlob(path: string, body: unknown): Promise<Blob> {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+  let res: Response;
+  try {
+    res = await fetch(path, { method: "POST", headers, body: JSON.stringify(body), credentials: "same-origin" });
+  } catch {
+    throw new ApiError(0, "NETWORK_ERROR", "Cannot reach the CareerPilot API. Check that the server is running.");
+  }
+  if (!res.ok) {
+    const err: unknown = await res.json().catch(() => null);
+    if (isEnvelope(err)) throw new ApiError(res.status, err.error.code, err.error.message, err.error.details, err.error.request_id);
+    throw new ApiError(res.status, "UNEXPECTED_RESPONSE", `Unexpected response (${res.status}).`);
+  }
+  return res.blob();
+}
+
 export const api = {
   get: <T>(path: string) => apiFetch<T>(path),
   post: <T>(path: string, body?: unknown) =>

@@ -1,0 +1,17 @@
+# Alertmanager routing (ADR-026). Delivery needs a destination chosen by the
+# operator: replace the "operator" receiver with email, Slack, PagerDuty or a
+# webhook (https://prometheus.io/docs/alerting/latest/configuration/). Until
+# then alerts are visible in the Alertmanager UI (localhost:9093) only.
+route:
+  receiver: operator
+  group_by: [alertname, job]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="critical"]
+      receiver: operator
+      repeat_interval: 1h
+
+receivers:
+  - name: operator

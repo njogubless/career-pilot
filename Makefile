@@ -79,3 +79,28 @@ lint-web:
 build: ## Build all artefacts
 	cd $(API_DIR) && CGO_ENABLED=0 go build -o bin/careerpilot ./cmd/careerpilot
 	cd $(WEB_DIR) && pnpm build
+
+# ---------- Operations (Phase 10, OPERATIONS_RUNBOOK.md) ----------
+.PHONY: observability backup restore-drill check-db-roles lint-deploy scan-secrets scan-images keys-status
+observability: ## Start the stack with Prometheus, Alertmanager and Jaeger
+	docker compose --profile observability up -d --build
+backup: ## Back up the database and document store to ./backups
+	scripts/backup.sh
+restore-drill: ## Verify the newest backup restores (throwaway Postgres; live data untouched)
+	@latest=$$(ls -1d backups/*/ 2>/dev/null | sort | tail -1); test -n "$$latest" || (echo "no backups; run make backup" && exit 1); \
+	API_IMAGE=careerpilot-api scripts/restore-drill.sh "$$latest"
+check-db-roles: ## Verify least-privilege database roles in a throwaway Postgres
+	scripts/check-db-roles.sh
+lint-deploy: ## ShellCheck, alert rule tests, nginx and Compose validation
+	cd scripts && docker run --rm -v "$$PWD:/s:ro" -w /s koalaman/shellcheck:v0.11.0 -x -S warning -- ./*.sh
+	docker run --rm --entrypoint promtool -v "$$PWD/deploy/observability:/c:ro" -w /c prom/prometheus:v3.7.3 check rules alerts.yml
+	docker run --rm --entrypoint promtool -v "$$PWD/deploy/observability:/c:ro" -w /c prom/prometheus:v3.7.3 test rules alerts_test.yml
+	docker run --rm --add-host api:127.0.0.1 -v "$$PWD/apps/web/nginx.conf:/etc/nginx/conf.d/default.conf:ro" nginxinc/nginx-unprivileged:1.29.3-alpine nginx -t
+	docker compose config -q
+scan-secrets: ## Scan git history for committed secrets (gitleaks)
+	docker run --rm -v "$$PWD:/repo" zricethezav/gitleaks:v8.28.0 git /repo --redact --no-banner
+scan-images: ## Scan built images for fixable HIGH/CRITICAL vulnerabilities (Trivy)
+	for i in careerpilot-api careerpilot-ai careerpilot-web; do \
+	  docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache aquasec/trivy:0.67.2 image --quiet --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 $$i || exit 1; done
+keys-status: ## Count stored secrets by encryption key version
+	docker compose exec api /careerpilot keys status

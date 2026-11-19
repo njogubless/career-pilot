@@ -1,0 +1,53 @@
+# promtool unit tests for alerts.yml: `make alerts-test`.
+rule_files: [alerts.yml]
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      # 10% of API requests fail for 20 minutes.
+      - series: 'careerpilot_http_requests_total{job="api",method="GET",route="/api/v1/jobs",status="200"}'
+        values: '0+90x20'
+      - series: 'careerpilot_http_requests_total{job="api",method="GET",route="/api/v1/jobs",status="500"}'
+        values: '0+10x20'
+      - series: 'careerpilot_schedules_overdue{job="worker"}'
+        values: '0x5 2x15'
+      - series: 'up{job="worker"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: APIHighErrorRate
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "More than 5% of API requests are failing with 5xx"
+              runbook: "OPERATIONS_RUNBOOK.md#alert-apihigherrorrate"
+      - eval_time: 18m
+        alertname: SchedulesOverdue
+        exp_alerts:
+          - exp_labels: { severity: warning, job: worker }
+            exp_annotations:
+              summary: "Workflow schedules are not firing"
+              runbook: "OPERATIONS_RUNBOOK.md#alert-schedulesoverdue"
+      - eval_time: 18m
+        alertname: ServiceDown
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      # Healthy: 0.5% errors must not alert.
+      - series: 'careerpilot_http_requests_total{job="api",method="GET",route="/x",status="200"}'
+        values: '0+199x30'
+      - series: 'careerpilot_http_requests_total{job="api",method="GET",route="/x",status="503"}'
+        values: '0+1x30'
+      - series: 'up{job="api"}'
+        values: '1x5 0x10'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: APIHighErrorRate
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: ServiceDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: api }
+            exp_annotations:
+              summary: "api is not reachable by Prometheus"
+              runbook: "OPERATIONS_RUNBOOK.md#alert-servicedown"

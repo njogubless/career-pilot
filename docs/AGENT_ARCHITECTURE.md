@@ -1,6 +1,6 @@
 # Agent Architecture
 
-Status: design accepted; implementation Phase 8 (with agent capabilities built incrementally in Phases 2–7).
+Status: **implemented in Phase 8** (ADR-024). Code: `services/api/internal/workflows` (orchestrator, registry, tools), `services/ai/app/goals` (interpretation), `services/ai/app/evals` (evaluation). Differences from the original design are listed in §9.
 
 ## 1. Principles
 1. **Agents reason; the platform decides.** Agents produce proposals and results. The Go platform validates plans, checks permissions, writes state and performs side effects.
@@ -100,3 +100,17 @@ The check runs immediately before the side effect, inside the same transaction t
 - injection resistance
 - recovery after a worker crash mid-task
 - duplicate-send prevention
+
+## 9. As implemented (Phase 8)
+- **Templates:**
+  - `DISCOVER_AND_RANK`: load_profile → search_jobs → match_jobs → rank → shortlist → report.
+  - `DISCOVER_PREPARE_APPROVE`: the same, then prepare_documents → compliance_check → request_approval → apply_approval → report.
+  - `outreach` and `weekly_report` templates are not built (see ADR-024).
+- **Registered tools (10):** `analyse_professional_profile`, `search_jobs`, `calculate_job_match`, `rank_opportunities`, `update_application_status`, `generate_tailored_cv`, `check_compliance`, `request_approval`, `approve_application_package`, `generate_career_report`.
+  - Not registered: `send_approved_email` and `submit_approved_application`. No agent can perform external side effects; emails are sent only by the user's explicit action (Phase 7), and submission is assisted (Phase 6).
+- **Permission enforcement:** `automation.Guard.Authorize` (Phase 6/7) checks the global pause, mode and limits immediately before each permissioned tool. Per-action autonomous permission grants (`automation_permissions`) are not built, because no autonomous external action exists.
+- **Approvals** are bound to a payload hash. Items flagged by compliance (fact-check errors, closed postings, instruction-like text in postings) cannot be approved through a workflow.
+- **Evaluation** (master prompt §21), with mocked providers:
+  - `apptest/workflows_test.go`: objective → plan → agents → approval → report; injection posting flagged and causing no extra actions; permission denial and retry; kill switch; needs-input and resume; cancellation; lost-job recovery; active limit; interpretation bounds.
+  - `workflows_test.go`: plan validity, grants, strict inputs, ranking, injection detector.
+  - `services/ai/app/evals`: labelled goal-interpretation set and harness.

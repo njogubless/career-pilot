@@ -49,35 +49,77 @@ PostgreSQL 16 + pgvector. Migrations: `services/api/migrations` (goose). Status 
 ### Matching (Phase 4)
 | Table | Notes |
 |---|---|
-| `job_match_results` | `(user_id, job_id, algorithm_version) UNIQUE`, overall_score numeric(5,2), dimension scores, eligibility (`ELIGIBLE`,`INELIGIBLE`,`UNKNOWN`), blockers jsonb, missing_skills jsonb, signals jsonb, confidence, explanation, weights jsonb, profile_hash, job_hash |
-| `match_feedback` | user thumbs/reason per result |
+Implemented in migration 00005.
 
-### Applications (Phases 5–6)
 | Table | Notes |
 |---|---|
-| `applications` | `(user_id, job_id) UNIQUE` (one application per job per user), status, channel (`ASSISTED`,`EMAIL`), idempotency_key, notes |
-| `application_status_history` | from/to status, actor (`USER`,`AGENT`,`SYSTEM`), reason, at |
-| `application_documents` | link to document_versions with role (`CV`,`COVER_LETTER`) |
-| `application_answers` | question, answer, source facts refs, status (`DRAFT`,`NEEDS_USER`,`APPROVED`) |
-| `submission_attempts` | channel, status (`PENDING`,`SUCCEEDED`,`FAILED`), error, idempotency_key UNIQUE |
-| `submission_evidence` | type (`USER_ATTESTED`,`EMAIL_SENT`,`EMAIL_CONFIRMATION`,`ATS_CONFIRMATION`), reference (message id / URL), attachment document id |
+| `job_analyses` | PK `(job_id, method)` with `method` DETERMINISTIC or LLM. Columns: `content_hash` (bytea, the analysed version), `analyzer_version`, `analysis` jsonb (plus a flat `skill_slugs` array with a GIN index), and provider, model and tokens for LLM rows |
+| `job_embeddings` | `job_id` PK, `model`, `content_hash`, `vector(384)`, HNSW cosine index |
+| `job_analysis_requests` | User-requested deep analysis progress: QUEUED, RUNNING, SUCCEEDED, FAILED |
+| `profile_skills.skill_slug`, `skill_catalogue_version` | Canonical link set by the pipeline |
+| `match_profiles` | Per user: text-skill mentions, catalogue version, profile embedding with input hash and model (a cache) |
+| `job_match_results` | `(user_id, job_id, algorithm_version) UNIQUE`. Columns: `overall_score` numeric(5,2), `eligibility`, `confidence`, `analysis_method`, `result` jsonb (dimensions, checks, skills, signals, unknowns, explanation), `weights` jsonb, `profile_hash`, `job_hash`. Index `(user_id, algorithm_version, overall_score DESC)` |
+| `match_feedback` | `(user_id, job_id) UNIQUE`. Columns: rating UP/DOWN, reason enum, note ≤ 500, `dismissed`, plus the `algorithm_version` and `score_at_feedback` reacted to |
+| `match_states` | Per-user run status (QUEUED, RUNNING, READY, FAILED), counts, `profile_hash` |
 
-### Outreach (Phase 7)
-`recruiter_contacts` (with `email_verification`: `UNVERIFIED`,`USER_PROVIDED`,`PROVIDER_VERIFIED`,`BOUNCED`), `email_accounts` (encrypted tokens, scopes, status), `outreach_messages` (draft/approved/sent/failed, gmail message/thread ids, `UNIQUE(idempotency_key)`), `follow_ups` (due_at, status, cancelled_reason), `contact_preferences` (do-not-contact).
-
-### Automation & workflows (Phase 8)
+### Application preparation (Phase 5, implemented: migration 00006, ADR-021)
 | Table | Notes |
 |---|---|
-| `automation_settings` | per user: mode (`DISCOVERY_ONLY`,`HUMAN_APPROVED`,`CONTROLLED_AUTONOMOUS`), `paused` (global kill switch), limits jsonb |
-| `automation_permissions` | per action type (`SEND_OUTREACH_EMAIL`, `SEND_APPLICATION_EMAIL`, `PREPARE_DOCUMENTS`…): granted, constraints jsonb, `revoked_at` |
-| `search_goals` | objective text, structured constraints jsonb, schedule (cron), status |
-| `workflow_executions` | goal_id, type, status (`PENDING`,`RUNNING`,`NEEDS_INPUT`,`AWAITING_APPROVAL`,`PAUSED`,`SUCCEEDED`,`PARTIALLY_SUCCEEDED`,`FAILED`,`CANCELLED`), plan jsonb, plan_version |
-| `workflow_tasks` | workflow_id, type, agent, input/expected_output/result jsonb, status, attempts, max_attempts, timeout_s, depends_on uuid[], required_permissions text[], started/completed_at, error |
-| `approval_requests` | subject type/id, action, payload snapshot, status (`PENDING`,`APPROVED`,`REJECTED`,`EXPIRED`), decided_at |
-| `agent_runs`, `agent_tool_calls` | per task: agent, tool, args (redacted), result summary, latency, model, prompt_version, token usage |
+| `application_documents` | `(user_id, job_id, kind) UNIQUE`, kind `CV`/`COVER_LETTER`/`APPLICATION_ANSWERS`. Generation inputs: `notes` (≤ 4,000 chars, cited as `note:1`) and `questions` jsonb. `current_version_id` and `approved_version_id` (deferrable FKs), `approved_at` |
+| `application_document_versions` | Immutable (a `BEFORE UPDATE` trigger raises an error). `version_no` is gap-free per document. `origin` is `GENERATED`/`TEMPLATE`/`USER_EDIT`/`RESTORED`, with `restored_from`. Also: `content` jsonb (doc-v1), `content_hash`, `facts_hash`, `validation` jsonb plus `validation_status` (`PASSED`/`WARNINGS`/`FAILED`/`NOT_VALIDATED`), generator `questions` and `warnings`, and provider, model, prompt version and tokens |
+| `application_document_approvals` | Approval history: the version, a fresh validation at approval time, `acknowledged_issues` and `revoked_at` |
+| `application_document_generations` | Async generation state (`QUEUED`/`RUNNING`/`SUCCEEDED`/`FAILED`) with the resulting `version_id` and error code and message. A partial unique index allows one active generation per document; generations stale for over 15 minutes are failed as `ABANDONED` on the next request |
+
+### Applications (Phase 6, implemented: migration 00007, ADR-022)
+| Table | Notes |
+|---|---|
+| `applications` | `(user_id, job_id) UNIQUE`. Columns: status (13 values), channel (`ASSISTED`/`EMAIL`), the pinned `cv_version_id`, `cover_letter_version_id` and `answers_version_id` (FK to document versions, `ON DELETE RESTRICT`), `approved_at`, `submitted_at`, notes ≤ 5,000. CHECKs: `APPROVED` and `FAILED` require a pinned CV and a channel; submitted-type statuses require `submitted_at`. The job FK is `RESTRICT` |
+| `application_status_history` | Append-only (trigger). Columns: from/to status, actor (`USER`/`AGENT`/`SYSTEM`), reason ≤ 1,000 |
+| `submission_attempts` | `(user_id, idempotency_key) UNIQUE`. Columns: channel, actor, status (`PENDING`/`SUCCEEDED`/`FAILED`/`CANCELLED`), `failure_reason`, `error_message`, started and finished times. Partial unique indexes allow one `PENDING` and one `SUCCEEDED` attempt per application |
+| `submission_evidence` | Append-only, except that `document_id` is set to NULL when its file is deleted. Columns: type (`USER_ATTESTED`/`EMAIL_SENT`/`EMAIL_CONFIRMATION`/`ATS_CONFIRMATION`), reference ≤ 500, note ≤ 2,000, `document_id` (an uploaded attachment), `occurred_at` |
+| `automation_settings` | Per user: mode (`DISCOVERY_ONLY`/`HUMAN_APPROVED`/`CONTROLLED`), `paused` and `paused_at` (kill switch), `daily_submission_limit` 1–200 (default 20). A missing row means the defaults |
+
+### Outreach (Phase 7, implemented: migration 00008, ADR-023)
+| Table | Notes |
+|---|---|
+| `email_accounts` | One per user (`GMAIL`). Columns: address, granted scopes, `access_token_enc`/`refresh_token_enc` (AES-256-GCM, bound to the user id), expiry, status (`CONNECTED`/`NEEDS_RECONNECT`) |
+| `oauth_states` | SHA-256 of the state, user, sealed PKCE verifier, 10-minute expiry; deleted on use |
+| `outreach_settings` | Daily send limit (1–50, default 10), recipient cooldown days (default 3), follow-ups enabled, days after (2–30), maximum (0–2), signature |
+| `recruiter_contacts` | Columns: name, title, company, job, profile URL, email (citext; unique per user), source (`USER_PROVIDED`/`JOB_POSTING`) with evidence, `email_verification` (`UNVERIFIED`/`DOMAIN_OK`/`INVALID`/`BOUNCED`), confidence, `do_not_contact` with reason, notes |
+| `outreach_messages` | Columns: contact (RESTRICT), job, application, parent (follow-ups), kind (`INTRODUCTION`/`FOLLOW_UP`), status (`DRAFT`/`APPROVED`/`SENDING`/`SENT`/`FAILED`/`UNKNOWN`/`CANCELLED`), origin, subject, body, attachment version (RESTRICT), validation, `approved_hash`, `(user, idempotency_key)` UNIQUE, RFC Message-ID, Gmail message and thread ids, `sent_at`, `replied_at`. CHECKs: `SENT` needs Gmail ids; approved-or-later statuses need `approved_hash` |
+| `outreach_replies` | Metadata only: Gmail message id (unique per user), sender, `is_bounce`, received time, application |
+| `outreach_follow_ups` | Per message and sequence (1–2): due time, status (`SCHEDULED`/`DRAFTED`/`CANCELLED`), draft id, cancellation reason |
+
+### Automation & workflows (Phase 8, implemented: migration 00009, ADR-024)
+| Table | Notes |
+|---|---|
+| `automation_settings` | Implemented in Phase 6 (mode, global pause, daily limit) |
+| `workflow_executions` | Columns: user, template (`DISCOVER_AND_RANK`/`DISCOVER_PREPARE_APPROVE`), objective (the user's words), interpretation (`STRUCTURED`/`AI`), validated `params`, `plan_version`, status (`PENDING`/`RUNNING`/`NEEDS_INPUT`/`AWAITING_APPROVAL`/`PAUSED`/`SUCCEEDED`/`PARTIALLY_SUCCEEDED`/`FAILED`/`CANCELLED`), reason, questions, report |
+| `workflow_tasks` | Task contract (§15): workflow, user, seq, type, agent, tool, input, expected output, required permissions, status, `depends_on uuid[]`, `run_always`, attempts and maximum, timeout, result or error code and message, timestamps |
+| `approval_requests` | One per approval task. Columns: action, summary, payload, `payload_hash`, status (`PENDING`/`APPROVED`/`REJECTED`/`EXPIRED`/`CANCELLED`), decision, expiry |
+| `agent_tool_calls` | Every tool invocation, including refusals. Columns: agent, tool, attempt, outcome (`SUCCEEDED`/`FAILED`/`DENIED`/`NEEDS_INPUT`/`WAITING_APPROVAL`), error, count-only summary, duration |
+| Not built | `automation_permissions` (no autonomous external actions exist) |
+
+### Automation & analytics (Phase 9, implemented: migration 00010, ADR-025)
+| Table | Notes |
+|---|---|
+| `workflow_schedules` | User, name, objective, template, validated `params`, cadence (`DAILY`/`WEEKLY`), weekday, hour, IANA timezone, enabled, `next_run_at` (indexed where enabled), last run, outcome (`STARTED`/`SKIPPED_PAUSED`/`SKIPPED_OVERLAP`/`SKIPPED_LIMIT`/`FAILED`) and message |
+| `workflow_executions` (+) | `schedule_id`, `scheduled_for`; unique `(schedule_id, scheduled_for)` where `schedule_id` is set: at most one run per slot |
+| `notification_preferences` | One row per user: `high_match`, `min_match_score` (50–100, default 80), `approvals`, `workflow_events`, `replies`, `follow_ups`, `weekly_report` |
+| `notifications` | User, kind, title, body, in-app link, `read_at`; `UNIQUE(user_id, dedupe_key)` |
+| `career_reports` | User, period start and end (inclusive dates), trigger (`SCHEDULED`/`MANUAL`), `data` jsonb; unique per user and period for scheduled reports |
+
+### Privacy and roles (Phase 10, implemented: migration 00011, ADR-026/027)
+| Object | Notes |
+|---|---|
+| `audit_forget_user(uuid)` | `SECURITY DEFINER` function. On account deletion it clears `ip` and `metadata` on that user's audit events; the events and the pseudonymous id remain |
+| Roles (`deploy/postgres/roles.sql`) | `careerpilot_owner` owns the schema and runs migrations. `careerpilot_app` gets DML on all tables, except `audit_events`, which is INSERT and SELECT only. Default privileges cover future tables, and migration 11 keeps audit append-only when the roles exist before the schema |
+| Deletion | Every user-owned table cascades from `users` (verified: 41 foreign keys; `job_analysis_requests.requested_by` is SET NULL). `audit_events` has no foreign key by design |
 
 ### Platform
-`notifications`, `audit_events` (append-only: actor, action, subject, outcome, metadata; no UPDATE/DELETE grants for the app role in production), `prompt_versions`, `model_versions`, `usage_records` (tokens, cost, per user per day → budgets and billing readiness), and River's own tables (`river_job` etc., created by River migrations).
+- **Implemented:** `audit_events` (actor, action, subject, outcome, metadata, IP, request id), and River's own tables (`river_job` etc., created by River migrations).
+- **Token usage:** stored per row on `profile_extractions`, `job_analyses` and `application_document_generations` (provider, model, input and output tokens).
+- **Not built:** `prompt_versions`, `model_versions` and a `usage_records` rollup for budgets and billing (prompt and model versions are recorded as strings on each AI-derived row).
 
 ## 3. Key indexes
 - `jobs`: `(dedupe_key)`, `(expired_at) WHERE expired_at IS NULL`, GIN on `to_tsvector(title || description_text)`, `(posted_at DESC)`.

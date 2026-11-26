@@ -1,11 +1,11 @@
 # Runtime dependencies (pinned). Update deliberately and run pip-audit.
-fastapi==0.162.7
+fastapi==0.165.0
 uvicorn[standard]==0.54.0
-pydantic==2.14.3
+pydantic==2.14.4
 pydantic-settings==2.16.3
 httpx==0.28.1
-anthropic==2.8.0
-pypdf==7.1.0
+anthropic==2.12.0
+pypdf==7.1.1
 python-docx==1.2.0
 # Local embeddings (ADR-020): ONNX runtime, BAAI/bge-small-en-v1.5 (MIT licence).
 fastembed==0.9.1
